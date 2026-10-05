@@ -2,6 +2,7 @@
 
 import json
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 from sqlalchemy import create_engine
@@ -20,6 +21,32 @@ def _mem_db(monkeypatch):
     TestSessionLocal = sessionmaker(bind=engine, autoflush=False)
     monkeypatch.setattr(csr, "SessionLocal", TestSessionLocal)
     return TestSessionLocal
+
+
+def test_provider_auth_identifier_is_generated_independently_of_credentials(monkeypatch):
+    TestSessionLocal = _mem_db(monkeypatch)
+    identifiers = iter([
+        UUID("12345678-0000-4000-8000-000000000001"),
+        UUID("87654321-0000-4000-8000-000000000002"),
+    ])
+    monkeypatch.setattr(csr.uuid, "uuid4", lambda: next(identifiers))
+    monkeypatch.setattr(csr.chatgpt_subscription, "fetch_available_models", lambda token: ["fixture-model"])
+    tokens = {"access_token": "ACCESS-SENTINEL", "refresh_token": "REFRESH-SENTINEL",
+              "api_key": "KEY-SENTINEL", "password": "PASSWORD-SENTINEL", "account_id": "ACCOUNT-SENTINEL"}
+    result = csr._provision_endpoint(tokens, "alice", label="label-sentinel")
+    assert result["provider_auth_id"] == "12345678"
+    assert result["id"] == "87654321"
+    assert not any(value in json.dumps(result) for value in tokens.values())
+    db = TestSessionLocal()
+    try:
+        auth = db.query(ProviderAuthSession).filter_by(id=result["provider_auth_id"]).one()
+        endpoint = db.query(ModelEndpoint).filter_by(id=result["id"]).one()
+        assert auth.access_token == tokens["access_token"]
+        assert auth.refresh_token == tokens["refresh_token"]
+        assert endpoint.provider_auth_id == auth.id
+        assert endpoint.api_key is None
+    finally:
+        db.close()
 
 
 def test_provision_creates_owner_scoped_auth_session_and_endpoint(monkeypatch):

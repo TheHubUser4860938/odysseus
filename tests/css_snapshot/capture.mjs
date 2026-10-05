@@ -7,8 +7,8 @@
 //
 // Determinism rules that matter here, because the digest is only useful if an
 // unchanged stylesheet always produces the same bytes:
-//   - every <script> is stripped from the document, so the DOM stays exactly
-//     what the server sends and no app module can mutate classes underneath us;
+//   - active script elements are removed and script execution is blocked, so
+//     no app module can mutate the served shell's classes underneath us;
 //   - the theme/density classes are injected into the <html> tag *before* the
 //     first paint instead of toggled afterwards, so no CSS transition is ever
 //     mid-interpolation while getComputedStyle runs;
@@ -227,6 +227,9 @@ async function main() {
   const missing = {};
 
   try {
+    // Keep parsing separate from the page whose navigation is intercepted.
+    const parser = await browser.newPage();
+    await parser.route('**/*', route => route.abort());
     let swapped = 0;
     for (const page of job.pages) {
       snapshot[page.name] = {};
@@ -280,7 +283,14 @@ async function main() {
         await tab.route(`**${documentPath}`, async route => {
           const response = await route.fetch();
           let html = await response.text();
-          html = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
+          // Browser parsing handles HTML/SVG scripts and unusual end tags.
+          // The parsed document is inert; only the script-free shell is served.
+          html = await parser.evaluate(source => {
+            const doc = new DOMParser().parseFromString(source, 'text/html');
+            doc.querySelectorAll('script').forEach(script => script.remove());
+            const doctype = doc.doctype ? new XMLSerializer().serializeToString(doc.doctype) : '';
+            return doctype + doc.documentElement.outerHTML;
+          }, html);
           // Focus states are outside this idle-state inventory. Autofocus can
           // run after load, racing the measurement and changing outline-offset.
           html = html.replace(/(<[^>]*?)\sautofocus(?=[\s=>])(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/gi, '$1');
@@ -291,7 +301,13 @@ async function main() {
           const classes = [variant.theme === 'light' ? 'light' : '', variant.density && variant.density !== 'comfortable' ? `density-${variant.density}` : '']
             .filter(Boolean).join(' ');
           html = html.replace(/<html\b([^>]*)>/i, (match, attrs) => `<html${attrs.replace(/\sclass="[^"]*"/i, '')} class="${classes}">`);
-          await route.fulfill({ response, body: html, headers: { ...response.headers(), 'content-type': 'text/html; charset=utf-8' } });
+          const headers = response.headers();
+          // Also deny handlers or scripts exposed by serialization/re-parsing.
+          // Playwright evaluation still runs the CSS measurement functions.
+          const scriptPolicy = "script-src 'none'";
+          headers['content-security-policy'] = headers['content-security-policy']
+            ? `${headers['content-security-policy']}, ${scriptPolicy}` : scriptPolicy;
+          await route.fulfill({ response, body: html, headers: { ...headers, 'content-type': 'text/html; charset=utf-8' } });
         });
 
         const response = await tab.goto(job.origin + page.url, { waitUntil: 'load' });

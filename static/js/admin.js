@@ -955,6 +955,8 @@ function renderFeatherlessPanel(panel, ep, row) {
 
 // ChatGPT per-endpoint usage panel expanded state persistence.
 // Preserves only endpoint/auth identifiers, never tokens, secrets, or labels.
+// providerAuthSessionId is ProviderAuthSession.id, independently UUID-generated
+// by routes/chatgpt_subscription_routes.py, not an OAuth token or account ID.
 const CHATGPT_USAGE_EXPANDED_KEY = 'odysseus-chatgpt-usage-expanded';
 
 function _loadExpandedUsageEndpoints() {
@@ -976,23 +978,23 @@ function _saveExpandedUsageEndpoints(set) {
   } catch (_) {}
 }
 
-function _isChatgptUsageExpanded(endpointId, authId) {
+function _isChatgptUsageExpanded(endpointId, providerAuthSessionId) {
   const set = _loadExpandedUsageEndpoints();
   if (endpointId != null && set.has(String(endpointId))) return true;
-  if (authId != null && set.has(String(authId))) return true;
+  if (providerAuthSessionId != null && set.has(String(providerAuthSessionId))) return true;
   return false;
 }
 
-function _setChatgptUsageExpanded(endpointId, authId, expanded) {
+function _setChatgptUsageExpanded(endpointId, providerAuthSessionId, expanded) {
   const set = _loadExpandedUsageEndpoints();
   const epKey = endpointId != null ? String(endpointId) : null;
-  const authKey = authId != null ? String(authId) : null;
+  const providerAuthSessionRowId = providerAuthSessionId != null ? String(providerAuthSessionId) : null;
   if (expanded) {
     if (epKey) set.add(epKey);
-    if (authKey) set.add(authKey);
+    if (providerAuthSessionRowId) set.add(providerAuthSessionRowId);
   } else {
     if (epKey) set.delete(epKey);
-    if (authKey) set.delete(authKey);
+    if (providerAuthSessionRowId) set.delete(providerAuthSessionRowId);
   }
   _saveExpandedUsageEndpoints(set);
 }

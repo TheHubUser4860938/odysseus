@@ -2,6 +2,7 @@
 const { chromium } = require('playwright');
 const { readFileSync } = require('fs');
 const assert = require('node:assert/strict');
+const { extractThemeBootstrap } = require('./helpers/theme_bootstrap.cjs');
 
 (async () => {
   const origin = process.env.ODYSSEUS_TEST_STATIC_ORIGIN;
@@ -111,7 +112,7 @@ const assert = require('node:assert/strict');
 
     // Verify the real early bootstrap handles persisted legacy preferences.
     const appHtml = readFileSync('static/index.html', 'utf8');
-    const bootstrap = [...appHtml.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].map(m => m[1]).find(code => code.includes('Apply font early'));
+    const bootstrap = await page.evaluate(extractThemeBootstrap, appHtml);
     assert(bootstrap);
     const early = await page.evaluate(async code => {
       const theme = await import('/static/js/theme.js');

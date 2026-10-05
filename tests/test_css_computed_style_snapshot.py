@@ -68,6 +68,37 @@ def test_baseline_covers_every_inventory_entry():
 
 
 @_requires_browser
+def test_capture_does_not_execute_script_markup_or_handlers(tmp_path):
+    """Use the real capture subprocess: every script vector would turn green."""
+    attack = "document.getElementById('guard').style.color='rgb(0, 128, 0)'"
+    source = f'''<!doctype html><html><head><style>#guard {{ color: rgb(255, 0, 0); }}</style></head>
+      <body onload="{attack}"><div id="guard">Stable</div>
+      <script>{attack}</script >
+      <SCRIPT>{attack}</SCRIPT>
+      <script data-note=">">{attack}</script\t>
+      <script src="attack.js"></script>
+      <svg onload="{attack}"><script>{attack}</script></svg>
+      <img src=x onerror="{attack}">
+      <template><script>{attack}</script></template>
+      </body></html>'''
+    (tmp_path / "fixture.html").write_text(source)
+    (tmp_path / "attack.js").write_text(attack)
+    inventory = {
+        "properties": ["color"],
+        "variants": [snapshot.load_inventory()["variants"][0]],
+        "pages": [{"name": "fixture", "url": "/fixture.html",
+                   "elements": [{"key": "guard", "selector": "#guard"}]}],
+    }
+    origin, shutdown = snapshot.serve_repository(tmp_path)
+    try:
+        captured = snapshot.capture(origin, inventory, measurement_delay_ms=100)
+        assert captured["missing"] == {}
+        assert captured["snapshot"]["fixture"][inventory["variants"][0]["name"]]["guard"]["color"] == "rgb(255, 0, 0)"
+    finally:
+        shutdown()
+
+
+@_requires_browser
 def test_computed_styles_match_the_committed_baseline():
     captured = snapshot.capture(static_origin())
 

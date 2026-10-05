@@ -1,6 +1,7 @@
 """Regression coverage for the browser markdown renderer."""
 
 import json
+import os
 import shutil
 import subprocess
 import textwrap
@@ -112,6 +113,32 @@ def _run_markdown_case(markdown: str, render_expr: str = "mod.mdToHtml(input)", 
     return json.loads(result.stdout.splitlines()[-1])["html"]
 
 
+def _run_svg_case(markdown: str):
+    # SVG title extraction requires a real inert DOM, not the Node template stub.
+    script = r'''
+      const { chromium } = require('playwright');
+      (async () => {
+        const browser = await chromium.launch({ headless: true });
+        try {
+          const page = await browser.newPage();
+          await page.goto(process.env.ODYSSEUS_TEST_STATIC_ORIGIN + '/static/js/documentStats.js');
+          await page.setContent('<div id="toast"></div><div id="sidebar"></div>');
+          const html = await page.evaluate(async input => {
+            const mod = await import('/static/js/markdown.js');
+            return mod.mdToHtml(input);
+          }, JSON.parse(process.env.ODYSSEUS_SVG_TEST_INPUT));
+          console.log(JSON.stringify({ html }));
+        } finally { await browser.close(); }
+      })().catch(error => { console.error(error); process.exit(1); });
+    '''
+    result = subprocess.run(
+        ["node", "-e", script], cwd=_REPO, capture_output=True, text=True,
+        env={**os.environ, "ODYSSEUS_SVG_TEST_INPUT": json.dumps(markdown)}, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)["html"]
+
+
 def test_ordered_lists_render_as_one_unwrapped_ol(node_available):
     html = _run_markdown_case(
         "Before\n\n"
@@ -134,7 +161,7 @@ def test_ordered_lists_render_as_one_unwrapped_ol(node_available):
 
 
 def test_fenced_svg_renders_inline_in_a_locked_sandbox(node_available):
-    html = _run_markdown_case(
+    html = _run_svg_case(
         "```svg\n"
         '<svg viewBox="0 0 1200 800"><title>Black hole formation</title>'
         '<circle cx="200" cy="300" r="80"/></svg>\n'
@@ -158,7 +185,7 @@ def test_fenced_svg_renders_inline_in_a_locked_sandbox(node_available):
 
 
 def test_multiple_fenced_svgs_remain_interleaved_with_explanations(node_available):
-    html = _run_markdown_case(
+    html = _run_svg_case(
         "```svg\n"
         '<svg viewBox="0 0 720 360"><title>Stage one</title></svg>\n'
         "```\n\nThe first mechanism explained.\n\n"
@@ -174,7 +201,7 @@ def test_multiple_fenced_svgs_remain_interleaved_with_explanations(node_availabl
 
 
 def test_complete_raw_svg_uses_the_same_locked_renderer(node_available):
-    html = _run_markdown_case(
+    html = _run_svg_case(
         "Before the visual.\n\n"
         '<svg viewBox="0 0 720 360"><title>Raw model SVG</title>'
         '<rect width="720" height="360" fill="var(--bg)"/></svg>'

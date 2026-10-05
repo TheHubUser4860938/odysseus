@@ -791,8 +791,13 @@ function renderSvgSandbox(source) {
   const height = viewBox ? Number(viewBox[2]) : 9;
   const ratio = Number.isFinite(width / height) && width > 0 && height > 0
     ? Math.max(0.5, Math.min(3, width / height)) : (16 / 9);
-  const titleMatch = cleaned.match(/<title(?:\s[^>]*)?>([\s\S]*?)<\/title>/i);
-  const title = (titleMatch?.[1] || 'Visual explanation').replace(/<[^>]*>/g, '').trim();
+  // Parse in an inert template: nested/malformed SVG title markup stays text.
+  let title = 'Visual explanation';
+  if (typeof document !== 'undefined') {
+    const template = document.createElement('template');
+    template.innerHTML = cleaned;
+    title = template.content.querySelector?.('svg title')?.textContent?.trim() || title;
+  }
   const csp = "default-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; style-src 'unsafe-inline'";
   const srcdoc = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>:root{${svgThemeCss()}}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--fg);overflow:hidden}body{display:grid;place-items:center}svg{display:block;width:100%;height:100%;max-width:100%;background:var(--bg);color:var(--fg)}</style></head><body>${cleaned}</body></html>`;
   return `<figure class="chat-svg-visual"><iframe class="chat-svg-preview" sandbox="" referrerpolicy="no-referrer" loading="lazy" title="${escapeHtml(title)}" style="aspect-ratio:${ratio}" srcdoc="${escapeHtml(srcdoc)}"></iframe></figure>`;

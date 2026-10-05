@@ -298,8 +298,17 @@ export function _showReaderMoreMenu(em, card, reader, anchor, data) {
     }
     const item = document.createElement('div');
     item.className = 'dropdown-item-compact' + (a.danger ? ' dropdown-item-danger' : '');
-    const arrow = a.submenu ? '<span style="margin-left:auto;opacity:0.5;">›</span>' : '';
-    item.innerHTML = _icon(a.icon) + `<span>${a.label}</span>${arrow}`;
+    // Icons come from repository-owned SVGs in this menu or reader buttons.
+    item.innerHTML = _icon(a.icon);
+    const label = document.createElement('span');
+    label.textContent = a.label;
+    item.appendChild(label);
+    if (a.submenu) {
+      const arrow = document.createElement('span');
+      arrow.style.cssText = 'margin-left:auto;opacity:0.5;';
+      arrow.textContent = '›';
+      item.appendChild(arrow);
+    }
     item.addEventListener('click', (e) => {
       e.stopPropagation();
       if (a.submenu === 'remind') {
