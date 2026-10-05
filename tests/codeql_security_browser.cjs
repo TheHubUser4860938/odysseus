@@ -30,6 +30,8 @@ const { extractThemeBootstrap } = require('./helpers/theme_bootstrap.cjs');
     // Expose the real internal loader only in this served test copy.
     await page.route('**/static/js/admin-codeql-harness.js', route => route.fulfill({ contentType: 'application/javascript',
       body: readFileSync('static/js/admin.js', 'utf8') + '\nexport { loadEndpoints };\n' }));
+    await page.route('**/static/js/sessions-codeql-harness.js', route => route.fulfill({ contentType: 'application/javascript',
+      body: readFileSync('static/js/sessions.js', 'utf8') + '\nexport { moveToFolder };\n' }));
     await page.goto(origin + '/security-harness');
 
     const rendered = await page.evaluate(async () => {
@@ -58,14 +60,19 @@ const { extractThemeBootstrap } = require('./helpers/theme_bootstrap.cjs');
       }
       const valid = addMessage('user', 'In the document, edit this specific text (lines 1–2):\n```\nselected\n```\n\nInstruction: **Keep bold** and `code`');
       const titles = [
+        { source: '<svg xmlns="http://www.w3.org/2000/svg"><title>Valid &amp; safe</title></svg>', title: 'Valid & safe' },
         { source: '<svg><title>Nested <b>bold</b> &amp; text</title></svg>', title: 'Nested bold & text' },
         { source: '<svg><title>\" onload=\"parent.executed++ &lt;script&gt;</title></svg>', title: '\" onload=\"parent.executed++ <script>' },
-        { source: '<svg><title>Malformed <b>nested</title ></svg>', title: 'Malformed nested' },
+        { source: '<svg><title>Malformed <b>nested</title ></svg>', title: 'Visual explanation' },
+        { source: '<svg><title><script>parent.executed++</script><b onload="parent.executed++">nested</b></title></svg>', title: 'parent.executed++nested' },
+        { source: '<svg><title><![CDATA["><img src=x onerror="parent.executed++">]]></title></svg>', title: '"><img src=x onerror="parent.executed++">' },
+        { source: '<svg><title></title><img src=x onerror="parent.executed++"></svg>', title: 'Visual explanation' },
         { source: '<svg><title> </title></svg>', title: 'Visual explanation' },
         { source: '<svg><text>No title</text></svg>', title: 'Visual explanation' },
       ].map(({ source, title }) => {
         const host = document.createElement('div');
         host.innerHTML = markdown.mdToHtml('```svg\n' + source + '\n```');
+        document.body.appendChild(host);
         const frame = host.querySelector('iframe');
         return { expected: title, actual: frame.title, sandbox: frame.getAttribute('sandbox'),
           referrer: frame.referrerPolicy, onload: frame.hasAttribute('onload'),
@@ -91,6 +98,17 @@ const { extractThemeBootstrap } = require('./helpers/theme_bootstrap.cjs');
       assert.equal(title.onload, false);
       assert.equal(title.csp, "default-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; style-src 'unsafe-inline'");
     }
+
+    const folderRequest = page.waitForRequest(request => request.method() === 'PATCH');
+    const sessionId = 'session/other?folder=bad#fragment%value';
+    await page.evaluate(async id => {
+      const { moveToFolder } = await import('/static/js/sessions-codeql-harness.js');
+      await moveToFolder(id, 'Safe folder');
+    }, sessionId);
+    const folderUrl = new URL((await folderRequest).url());
+    assert.equal(folderUrl.pathname, '/api/session/' + encodeURIComponent(sessionId));
+    assert.equal(folderUrl.search, '');
+    assert.equal(folderUrl.hash, '');
 
     const menus = await page.evaluate(async () => {
       const { _showReaderMoreMenu } = await import('/static/js/emailLibrary/menus.js');

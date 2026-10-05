@@ -2003,7 +2003,11 @@ def setup_skills_routes(skills_manager: SkillsManager) -> APIRouter:
         it untouched). It never changes the skill's published/draft STATUS."""
         import time as _time
         import asyncio as _asyncio
-        from src.endpoint_resolver import resolve_endpoint
+        from core.database import SessionLocal
+        from src.endpoint_resolver import (
+            build_chat_url, build_headers, resolve_endpoint,
+            resolve_endpoint_runtime, resolve_owner_registered_endpoint,
+        )
 
         user = _owner(request)
         body = await request.json()
@@ -2027,10 +2031,18 @@ def setup_skills_routes(skills_manager: SkillsManager) -> APIRouter:
         # session's model. Fall back to the caller's session model only if unset.
         url, model, headers = resolve_endpoint("utility", owner=user)
         if not url or not model:
-            url = url or ((body.get("endpoint_url") or "").strip() or None)
+            if not url and body.get("endpoint_url") is not None:
+                db = SessionLocal()
+                try:
+                    endpoint = resolve_owner_registered_endpoint(db, body["endpoint_url"], user)
+                    base, api_key = resolve_endpoint_runtime(endpoint, owner=user)
+                    url = build_chat_url(base)
+                    headers = build_headers(api_key, base)
+                except ValueError as exc:
+                    raise HTTPException(400, str(exc)) from exc
+                finally:
+                    db.close()
             model = model or ((body.get("model") or "").strip() or None)
-            if headers is None and isinstance(body.get("headers"), dict):
-                headers = body.get("headers")
         if not url or not model:
             raise HTTPException(400, "No model configured — set a Default or Utility model in Settings.")
 

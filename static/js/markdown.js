@@ -791,12 +791,13 @@ function renderSvgSandbox(source) {
   const height = viewBox ? Number(viewBox[2]) : 9;
   const ratio = Number.isFinite(width / height) && width > 0 && height > 0
     ? Math.max(0.5, Math.min(3, width / height)) : (16 / 9);
-  // Parse in an inert template: nested/malformed SVG title markup stays text.
+  // XML parsing extracts text without inserting title markup into an HTML DOM.
   let title = 'Visual explanation';
-  if (typeof document !== 'undefined') {
-    const template = document.createElement('template');
-    template.innerHTML = cleaned;
-    title = template.content.querySelector?.('svg title')?.textContent?.trim() || title;
+  if (typeof DOMParser !== 'undefined') {
+    const svg = new DOMParser().parseFromString(cleaned, 'image/svg+xml');
+    if (!svg.querySelector('parsererror')) {
+      title = svg.querySelector('svg title')?.textContent?.trim() || title;
+    }
   }
   const csp = "default-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; style-src 'unsafe-inline'";
   const srcdoc = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>:root{${svgThemeCss()}}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--fg);overflow:hidden}body{display:grid;place-items:center}svg{display:block;width:100%;height:100%;max-width:100%;background:var(--bg);color:var(--fg)}</style></head><body>${cleaned}</body></html>`;

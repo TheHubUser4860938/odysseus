@@ -7,6 +7,17 @@ from tests.helpers.document_source import document_source
 _REPO = Path(__file__).resolve().parent.parent
 
 
+def test_svg_title_extraction_uses_xml_text_without_html_assignment():
+    src = (_REPO / "static" / "js" / "markdown.js").read_text(encoding="utf-8")
+    render = src.split("function renderSvgSandbox(source)", 1)[1].split(
+        "function replaceRawSvgBlocks", 1
+    )[0]
+    assert "innerHTML" not in render
+    assert "parseFromString(cleaned, 'image/svg+xml')" in render
+    assert "textContent" in render
+    assert "parsererror" in render
+
+
 def test_markdown_raw_html_sanitizer_checks_url_attr_edge_cases():
     src = (_REPO / "static" / "js" / "markdown.js").read_text(encoding="utf-8")
 

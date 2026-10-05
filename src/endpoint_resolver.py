@@ -281,6 +281,29 @@ def same_endpoint_base(left, right) -> bool:
         return False
 
 
+def resolve_owner_registered_endpoint(db, endpoint_url: str, owner: Optional[str] = None):
+    """Authorize a caller URL against enabled, owner-visible endpoint rows.
+
+    Request credentials, query strings and fragments are never endpoint identity.
+    Return the server-owned row so runtime credentials come from registration.
+    """
+    from src.auth_helpers import owner_filter
+
+    if not isinstance(endpoint_url, str) or not same_endpoint_base(endpoint_url, endpoint_url):
+        raise ValueError("Invalid model endpoint URL")
+    query = db.query(ModelEndpoint).filter(ModelEndpoint.is_enabled.is_(True))
+    for endpoint in owner_filter(query, ModelEndpoint, owner).all():
+        if same_endpoint_base(endpoint_url, endpoint.base_url):
+            return endpoint
+    raise ValueError("Model endpoint must be enabled and registered for the current owner")
+
+
+def resolve_owner_registered_endpoint_url(db, endpoint_url: str, owner: Optional[str] = None) -> str:
+    """Return only the registered canonical base, never the caller's URL."""
+    endpoint = resolve_owner_registered_endpoint(db, endpoint_url, owner)
+    return normalize_base(endpoint.base_url)
+
+
 def _validated_endpoint_base(url: str) -> str:
     """Return a base URL that is safe for endpoint path appends."""
     base = (url or "").strip().rstrip("/")
