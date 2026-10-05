@@ -12,7 +12,7 @@ import re
 import asyncio 
 from typing import Any, Dict, List, Optional, Set, Tuple
 from src.database import McpServer, SessionLocal
-
+from src.mcp_server_compat import result_is_error, tool_input_schema
 from src.runtime_paths import get_app_root
 
 logger = logging.getLogger(__name__)
@@ -236,7 +236,7 @@ class McpManager:
                     tools.append({
                         "name": tool.name,
                         "description": tool.description or "",
-                        "input_schema": tool.inputSchema if hasattr(tool, "inputSchema") else {},
+                        "input_schema": tool_input_schema(tool),
                         # MCP tool annotations (readOnlyHint / destructiveHint) drive
                         # plan-mode read-only gating. Absent on many servers, so we
                         # fall back to a name heuristic in mcp_tool_is_readonly().
@@ -306,7 +306,7 @@ class McpManager:
                     tools.append({
                         "name": tool.name,
                         "description": tool.description or "",
-                        "input_schema": tool.inputSchema if hasattr(tool, 'inputSchema') else {},
+                        "input_schema": tool_input_schema(tool),
                         # MCP tool annotations (readOnlyHint / destructiveHint) drive
                         # plan-mode read-only gating. Absent on many servers, so we
                         # fall back to a name heuristic in mcp_tool_is_readonly().
@@ -394,7 +394,7 @@ class McpManager:
                 tools.append({
                     "name": tool.name,
                     "description": tool.description or "",
-                    "input_schema": tool.inputSchema if hasattr(tool, "inputSchema") else {},
+                    "input_schema": tool_input_schema(tool),
                 })
 
             self._sessions[server_id] = session
@@ -641,7 +641,7 @@ class McpManager:
                 output_parts.append(str(content.data))
 
         output = "\n".join(output_parts)
-        is_error = getattr(result, 'isError', False)
+        is_error = result_is_error(result)
 
         result_dict = {
             "stdout": output if not is_error else "",
