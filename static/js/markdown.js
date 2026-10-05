@@ -791,14 +791,32 @@ function renderSvgSandbox(source) {
   const height = viewBox ? Number(viewBox[2]) : 9;
   const ratio = Number.isFinite(width / height) && width > 0 && height > 0
     ? Math.max(0.5, Math.min(3, width / height)) : (16 / 9);
-  // XML parsing extracts text without inserting title markup into an HTML DOM.
-  let title = 'Visual explanation';
-  if (typeof DOMParser !== 'undefined') {
-    const svg = new DOMParser().parseFromString(cleaned, 'image/svg+xml');
-    if (!svg.querySelector('parsererror')) {
-      title = svg.querySelector('svg title')?.textContent?.trim() || title;
-    }
-  }
+  // Extract only a strict text-only SVG title. Do not reparse model output as DOM.
+  // Nested or malformed title markup falls back to the generic accessible label.
+  const decodeSvgTitleEntities = value => String(value || '').replace(
+    /&(?:#([0-9]+)|#x([0-9a-f]+)|(amp|lt|gt|quot|apos));/gi,
+    (entity, decimal, hex, named) => {
+      if (named) {
+        return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }[named.toLowerCase()];
+      }
+      const codePoint = Number.parseInt(decimal || hex, decimal ? 10 : 16);
+      if (
+        !Number.isInteger(codePoint)
+        || codePoint < 0
+        || codePoint > 0x10ffff
+        || (codePoint >= 0xd800 && codePoint <= 0xdfff)
+      ) {
+        return '\uFFFD';
+      }
+      return String.fromCodePoint(codePoint);
+    },
+  );
+
+  const titleMatch = /<title(?:\s[^<>]*)?>([^<>]*)<\/title\s*>/i.exec(cleaned);
+  const extractedTitle = titleMatch
+    ? decodeSvgTitleEntities(titleMatch[1]).trim()
+    : '';
+  const title = extractedTitle || 'Visual explanation';
   const csp = "default-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; style-src 'unsafe-inline'";
   const srcdoc = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>:root{${svgThemeCss()}}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--fg);overflow:hidden}body{display:grid;place-items:center}svg{display:block;width:100%;height:100%;max-width:100%;background:var(--bg);color:var(--fg)}</style></head><body>${cleaned}</body></html>`;
   return `<figure class="chat-svg-visual"><iframe class="chat-svg-preview" sandbox="" referrerpolicy="no-referrer" loading="lazy" title="${escapeHtml(title)}" style="aspect-ratio:${ratio}" srcdoc="${escapeHtml(srcdoc)}"></iframe></figure>`;

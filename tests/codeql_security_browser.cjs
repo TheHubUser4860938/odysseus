@@ -61,11 +61,12 @@ const { extractThemeBootstrap } = require('./helpers/theme_bootstrap.cjs');
       const valid = addMessage('user', 'In the document, edit this specific text (lines 1–2):\n```\nselected\n```\n\nInstruction: **Keep bold** and `code`');
       const titles = [
         { source: '<svg xmlns="http://www.w3.org/2000/svg"><title>Valid &amp; safe</title></svg>', title: 'Valid & safe' },
-        { source: '<svg><title>Nested <b>bold</b> &amp; text</title></svg>', title: 'Nested bold & text' },
+        { source: '<svg><title>Numeric &#60;safe&#62; &#x26; sound</title></svg>', title: 'Numeric <safe> & sound' },
+        { source: '<svg><title>Nested <b>bold</b> &amp; text</title></svg>', title: 'Visual explanation' },
         { source: '<svg><title>\" onload=\"parent.executed++ &lt;script&gt;</title></svg>', title: '\" onload=\"parent.executed++ <script>' },
         { source: '<svg><title>Malformed <b>nested</title ></svg>', title: 'Visual explanation' },
-        { source: '<svg><title><script>parent.executed++</script><b onload="parent.executed++">nested</b></title></svg>', title: 'parent.executed++nested' },
-        { source: '<svg><title><![CDATA["><img src=x onerror="parent.executed++">]]></title></svg>', title: '"><img src=x onerror="parent.executed++">' },
+        { source: '<svg><title><script>parent.executed++</script><b onload="parent.executed++">nested</b></title></svg>', title: 'Visual explanation' },
+        { source: '<svg><title><![CDATA["><img src=x onerror="parent.executed++">]]></title></svg>', title: 'Visual explanation' },
         { source: '<svg><title></title><img src=x onerror="parent.executed++"></svg>', title: 'Visual explanation' },
         { source: '<svg><title> </title></svg>', title: 'Visual explanation' },
         { source: '<svg><text>No title</text></svg>', title: 'Visual explanation' },
