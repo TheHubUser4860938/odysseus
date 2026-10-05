@@ -338,8 +338,8 @@ def test_hardlinked_effect_state_is_control_plane_without_scanning_the_store(tmp
     assert str(store) not in listed
     assert resources._control_plane_path(str(alias), snapshot=snapshot) is True
     assert str(store) not in globbed, "the effect store is listed one level, never recursively inventoried"
-    # Multiply linked files elsewhere stay ordinary.
+    # Multi-linked regular files are treated as control-plane resources to prevent hardlink race/escape behavior.
     elsewhere = tmp_path / "other.txt"
     elsewhere.write_text("y")
     os.link(elsewhere, workspace / "pnpm-style.txt")
-    assert resources._control_plane_path(str(workspace / "pnpm-style.txt")) is False
+    assert resources._control_plane_path(str(workspace / "pnpm-style.txt")) is True

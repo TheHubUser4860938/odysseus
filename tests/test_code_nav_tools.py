@@ -61,10 +61,19 @@ def test_grep_ignore_case(repo):
     assert "b.txt:2:" in r["output"]
 
 
-def test_grep_glob_filter(repo):
+def test_grep_glob_filter(repo, monkeypatch):
     r = _run("grep", f'{{"pattern": "needle", "ignore_case": true, "glob": "*.py", "path": "{repo}"}}')
+    assert r["exit_code"] == 0
     assert "a.py" in r["output"]
     assert "b.txt" not in r["output"]
+
+    # Positive control: verify that fallback path honors the exact same glob contract
+    real_which = shutil.which
+    monkeypatch.setattr(shutil, "which", lambda name, *a, **kw: None if name == "rg" else real_which(name, *a, **kw))
+    r_fallback = _run("grep", f'{{"pattern": "needle", "ignore_case": true, "glob": "*.py", "path": "{repo}"}}')
+    assert r_fallback["exit_code"] == 0
+    assert "a.py" in r_fallback["output"]
+    assert "b.txt" not in r_fallback["output"]
 
 
 def test_grep_no_match(repo):

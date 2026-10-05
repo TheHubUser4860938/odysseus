@@ -179,8 +179,16 @@ def test_cancelled_write_unsettles_an_earlier_success(run, ws, monkeypatch):
 
 def test_mid_write_failure_unsettles_but_refusal_preserves(run, ws, monkeypatch):
     run("write_file", {"path": "a.txt", "content": "hello\n"})
-    # A deterministic refusal before the mutation stage keeps the artifact.
+    # Explicit empty JSON clear/write is authoritative and succeeds.
     run("write_file", {"path": "a.txt", "content": ""})
+    assert run.journal.effects.assessments()[-1].execution is fx.ExecutionOutcome.REPORTED_SUCCESS
+
+    # Re-seed the artifact content
+    run("write_file", {"path": "a.txt", "content": "hello\n"})
+    assert ledger(run.journal, ws).evaluate().can_complete
+
+    # A deterministic refusal before the mutation stage keeps the artifact.
+    run("write_file", "a.txt\n")
     assert run.journal.effects.assessments()[-1].execution is fx.ExecutionOutcome.FAILED
     assert ledger(run.journal, ws).evaluate().can_complete
 

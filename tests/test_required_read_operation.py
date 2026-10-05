@@ -139,7 +139,7 @@ def run_terminal_branch(monkeypatch, native_calls, result, operation=None, *, ma
         _required_read_native_id=al._required_read_native_id,
         _dispatch_required_safe_read=al._dispatch_required_safe_read,
         _compute_final_metrics=lambda *a, **kw: {"tool_events": a[8]},
-        session_id="fixture", disabled_tools=set(), tool_policy=policy,
+        session_id="fixture", disabled_tools=set(), _caller_hard_denials=frozenset(), tool_policy=policy,
         owner="fixture", workspace=None, run_security=context, active_document=None,
         client_runtime_context=None, round_num=1, model="fixture-model",
         actual_endpoint_id="fixture-endpoint", actual_endpoint_label="fixture",

@@ -1206,23 +1206,38 @@ async def test_write_file_inline_json_args(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_write_file_rejects_missing_content_in_legacy_native_shape(monkeypatch):
+async def test_write_file_rejects_missing_content_in_legacy_native_shape(monkeypatch, tmp_path):
     """A native call missing schema-required content must not create 0-byte artifacts."""
+    import json
     import src.tool_execution as tool_execution
     from src.agent_tools.filesystem_tools import WriteFileTool
 
     touched = []
+    target = tmp_path / "should-not-be-written.html"
 
     def fake_resolve(path):
         touched.append(path)
-        return "/tmp/should-not-be-written.html"
+        return str(target)
 
     monkeypatch.setattr(tool_execution, "_resolve_tool_path", fake_resolve)
-    result = await WriteFileTool().execute("/workspace/output.html\n", {})
 
+    # 1. Missing content section in legacy shape is rejected
+    result = await WriteFileTool().execute("/workspace/output.html", {})
     assert result["exit_code"] == 1
     assert "content required" in result["error"]
     assert touched == ["/workspace/output.html"]
+    assert not target.exists()
+
+    # 2. Missing content in native JSON shape is also rejected
+    result_json = await WriteFileTool().execute(json.dumps({"path": "/workspace/output.html"}), {})
+    assert result_json["exit_code"] == 1
+    assert "content required" in result_json["error"]
+
+    # 3. Positive control: explicit empty body on a new path creates an empty file under Task 3.5/3.7
+    result_created = await WriteFileTool().execute("/workspace/output.html\n", {})
+    assert result_created["exit_code"] == 0
+    assert target.exists()
+    assert target.read_text(encoding="utf-8") == ""
 
 
 @pytest.mark.asyncio

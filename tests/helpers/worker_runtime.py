@@ -59,6 +59,7 @@ def isolated_runtime(worker="main"):
             for name, path in paths.items():
                 path.mkdir(mode=0o700)
                 patcher.setenv(name, str(path))
+            (root / "data" / "agent_workspace").mkdir(mode=0o700, exist_ok=True)
             # Browser resolution falls back to our XDG runtime directory.
             patcher.delenv("AGENT_BROWSER_SOCKET_DIR", raising=False)
             tmp = root / "tmp"

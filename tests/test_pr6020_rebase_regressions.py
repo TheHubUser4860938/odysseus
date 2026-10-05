@@ -240,8 +240,7 @@ def test_non_qwen_fallback_keeps_requested_temperature(monkeypatch):
 
 
 def test_qwen_notes_fallback_reenables_personal_managers(monkeypatch):
-    """The answering candidate's notes mode must unblock the managers for
-    execution, not just enable them in its own route schemas."""
+    """Model/route fallback cannot bypass caller-disabled tools; denials persist."""
 
     _install_route_probe(monkeypatch)
     stream_round = 0
@@ -299,8 +298,9 @@ def test_qwen_notes_fallback_reenables_personal_managers(monkeypatch):
         )
     )
 
-    assert seen_exec["disabled_tools"].isdisjoint(
-        {"manage_notes", "manage_calendar", "manage_tasks"}
+    # Caller hard denials are absolute: route fallback cannot re-enable disabled tools.
+    assert {"manage_notes", "manage_calendar", "manage_tasks"}.issubset(
+        seen_exec["disabled_tools"]
     )
 
 

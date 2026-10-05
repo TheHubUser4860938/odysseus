@@ -1182,9 +1182,23 @@ class GrepTool:
                 return None
 
             if rg:
+                if glob_pat:
+                    try:
+                        glob_regex = _glob_to_regex(glob_pat.replace("\\", "/"))
+                        targets = [
+                            target for target in targets
+                            if glob_regex.fullmatch(os.path.relpath(target, base).replace(os.sep, "/"))
+                            or glob_regex.fullmatch(os.path.basename(target))
+                        ]
+                    except re.error:
+                        pass
                 # Validate even when policy filtering leaves no search targets.
                 if not targets:
-                    error = run_rg([rg, "--json", "--no-config", "--regexp", pattern, "--", "-"])
+                    cmd_probe = [rg, "--json", "--no-config"]
+                    if glob_pat:
+                        cmd_probe += ["--glob", glob_pat]
+                    cmd_probe += ["--regexp", pattern, "--", "-"]
+                    error = run_rg(cmd_probe)
                     return (None, error) if error else ([], None)
                 relative_targets = [os.path.relpath(target, base) for target in targets]
                 for offset in range(0, len(relative_targets), 128):
