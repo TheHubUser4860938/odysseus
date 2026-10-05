@@ -293,3 +293,82 @@ def test_custom_lane_uses_http_down_latch(monkeypatch):
 
     assert calls == [{"url": None, "model": None, "api_key": None}]
     embeddings.reset_http_embed_state()
+
+
+def test_fastembed_clients_are_shared_across_lanes(monkeypatch):
+    """ONNX weights are heap copies (~1.2GB each for bge-large), so loading one
+    model once per consumer is what pushed the server to ~4.4GB resident. Every
+    lane must reuse a single client."""
+    import src.embedding_lanes as lanes
+    import src.embeddings as embeddings
+
+    fake = FakeChroma()
+    patch_chroma(monkeypatch, fake)
+    embeddings.reset_http_embed_state()
+
+    constructed = []
+
+    class OneModelFastEmbed:
+        def __init__(self, model=None):
+            constructed.append(model)
+            self.model = model or "sentence-transformers/all-MiniLM-L6-v2"
+            self.url = "local://fastembed"
+
+        def get_sentence_embedding_dimension(self):
+            return 384
+
+        def encode(self, texts, normalize_embeddings=True):
+            return [[float(i + 1)] * 384 for i, _ in enumerate(texts)]
+
+    monkeypatch.setattr(embeddings, "FastEmbedClient", OneModelFastEmbed)
+    monkeypatch.setattr(embeddings, "_DEFAULT_FASTEMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+
+    def fake_http_client():
+        raise RuntimeError("HTTP embedding lane unavailable")
+
+    monkeypatch.setattr(lanes, "_build_custom_client", fake_http_client)
+
+    memories = build_embedding_lanes("odysseus_memories")
+    docs = build_embedding_lanes("odysseus_rag")
+
+    assert len(constructed) == 1, "ONNX model was loaded once per consumer"
+    assert memories[0].client is docs[0].client
+    assert embeddings.get_fastembed_client() is memories[0].client
+    embeddings.reset_http_embed_state()
+
+
+def test_reset_reloads_fastembed_after_model_switch(monkeypatch):
+    """Each distinct model keeps its own cached client, and resetting the cache
+    lets a model/config change pick up new weights without a restart."""
+    import src.embeddings as embeddings
+
+    loaded = []
+
+    class ModelAwareFastEmbed:
+        def __init__(self, model=None):
+            loaded.append(model)
+            self.model = model or "sentence-transformers/all-MiniLM-L6-v2"
+            self.url = "local://fastembed"
+
+        def get_sentence_embedding_dimension(self):
+            return 384 if "MiniLM" in self.model else 1024
+
+    monkeypatch.setattr(embeddings, "FastEmbedClient", ModelAwareFastEmbed)
+
+    small = embeddings.get_fastembed_client("sentence-transformers/all-MiniLM-L6-v2")
+    assert embeddings.get_fastembed_client("sentence-transformers/all-MiniLM-L6-v2") is small
+    large = embeddings.get_fastembed_client("BAAI/bge-large-en-v1.5")
+
+    assert large is not small
+    assert large.get_sentence_embedding_dimension() == 1024
+
+    embeddings.reset_fastembed_client_cache()
+    reloaded = embeddings.get_fastembed_client("BAAI/bge-large-en-v1.5")
+
+    assert reloaded is not large
+    assert loaded == [
+        "sentence-transformers/all-MiniLM-L6-v2",
+        "BAAI/bge-large-en-v1.5",
+        "BAAI/bge-large-en-v1.5",
+    ]
+    embeddings.reset_fastembed_client_cache()

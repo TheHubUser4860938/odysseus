@@ -27,9 +27,10 @@ if os.name == "nt":
     os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
 import logging
+import threading
 import numpy as np
 import httpx
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from src.runtime_paths import get_app_root
 
@@ -241,6 +242,62 @@ def _load_persisted_endpoint() -> dict:
 
 
 _http_embed_down = False  # process-level latch: skip re-probing a dead endpoint
+_embed_client_cache = None  # singleton cache: only load the model once
+# ONNX Runtime copies model weights onto the heap (it does not mmap them), so a
+# single bge-large-en-v1.5 session costs ~1.2GB of *private* RSS. Every consumer
+# used to build its own FastEmbedClient, and with the RAG, semantic-memory and
+# tool-index lanes each holding one the process settled at 3-4x the model size
+# (~4.4GB resident). One client per model name is cached here and shared.
+_fastembed_client_cache: Dict[str, "FastEmbedClient"] = {}
+_fastembed_cache_lock = threading.Lock()
+
+
+def get_fastembed_client(model: Optional[str] = None) -> "FastEmbedClient":
+    """Factory: return a process-wide local FastEmbed client, loading the ONNX
+    weights at most once per model name. get_embedding_client() and every
+    embedding lane (RAG / semantic memory / tool index) share this one copy.
+
+    Raises what FastEmbedClient() raises (missing fastembed, bad model, unreadable
+    cache dir); the failed load is not cached, so a later call can retry.
+    """
+    key = (model or os.getenv("FASTEMBED_MODEL", "") or "").strip() or _DEFAULT_FASTEMBED_MODEL
+
+    cached = _fastembed_client_cache.get(key)
+    if cached is not None:
+        return cached
+
+    with _fastembed_cache_lock:
+        cached = _fastembed_client_cache.get(key)
+        if cached is not None:
+            return cached
+        # Only pass the model through when a caller asked for a specific one, so
+        # the default path keeps resolving FASTEMBED_MODEL inside FastEmbedClient.
+        client = FastEmbedClient(model) if model else FastEmbedClient()
+        client.get_sentence_embedding_dimension()  # health check
+        resolved = getattr(client, "model", None) or key
+        _fastembed_client_cache[resolved] = client
+        if resolved != key:
+            _fastembed_client_cache[key] = client
+        logger.info(
+            "FastEmbed client ready: model=%s (models resident in this process=%d)",
+            resolved,
+            len({id(c) for c in _fastembed_client_cache.values()}),
+        )
+        return client
+
+
+def reset_fastembed_client_cache() -> int:
+    """Drop cached local FastEmbed clients so the next get_fastembed_client()
+    reloads — needed when FASTEMBED_MODEL changes or when a working HTTP endpoint
+    takes over and the local ONNX weights should be released.
+
+    Live EmbeddingLane objects hold their own references to the old client, so
+    pair this with reset_embedding_lane_state() / reset_tool_index() /
+    src.rag_singleton to actually free the heap. Returns clients dropped."""
+    with _fastembed_cache_lock:
+        dropped = len({id(c) for c in _fastembed_client_cache.values()})
+        _fastembed_client_cache.clear()
+    return dropped
 
 
 def reset_http_embed_state():
@@ -249,13 +306,20 @@ def reset_http_embed_state():
     setting changes (e.g. the user starts Ollama and saves the endpoint) —
     otherwise a latch tripped at startup would keep us on FastEmbed for the
     whole process even after the endpoint comes back."""
-    global _http_embed_down
+    global _http_embed_down, _embed_client_cache
     _http_embed_down = False
+    _embed_client_cache = None  # invalidate cache when endpoint changes
+    reset_fastembed_client_cache()
 
 
 def get_embedding_client():
-    """Factory: try HTTP API first, fall back to local fastembed."""
-    global _http_embed_down
+    """Factory: try HTTP API first, fall back to local fastembed.
+    Returns a singleton instance cached across the process lifetime."""
+    global _http_embed_down, _embed_client_cache
+
+    # Return cached client if we already have one
+    if _embed_client_cache is not None:
+        return _embed_client_cache
 
     # Check for a persisted custom endpoint (saved from admin panel)
     persisted = _load_persisted_endpoint()
@@ -277,16 +341,18 @@ def get_embedding_client():
             client = EmbeddingClient()
             client.get_sentence_embedding_dimension()  # health check
             logger.info(f"Using HTTP embedding API: {client.url} model={client.model}")
+            _embed_client_cache = client
             return client
         except Exception as e:
             _http_embed_down = True
             logger.warning(f"HTTP embedding API unavailable ({e}); using local FastEmbed for the rest of this process")
 
-    # Fall back to local fastembed
+    # Fall back to local fastembed (shared per-model singleton, so the ONNX
+    # weights are loaded once for the whole process, not once per consumer).
     try:
-        client = FastEmbedClient()
-        client.get_sentence_embedding_dimension()
+        client = get_fastembed_client()
         logger.info(f"Using local FastEmbed: model={client.model}")
+        _embed_client_cache = client
         return client
     except ImportError:
         logger.error("fastembed not installed — run: pip install fastembed")

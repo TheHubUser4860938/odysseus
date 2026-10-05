@@ -112,11 +112,18 @@ def _load_custom_endpoint() -> Dict[str, str]:
 
 
 def _build_fastembed_client():
-    from src.embeddings import FastEmbedClient
+    from src.embeddings import FastEmbedClient, get_fastembed_client
 
-    client = FastEmbedClient()
-    client.get_sentence_embedding_dimension()
-    return client
+    try:
+        return get_fastembed_client()
+    except ImportError:
+        raise
+    # If a caller (test double) replaces FastEmbedClient with something that is
+    # not the real ONNX loader, fall back to constructing it directly.
+    except TypeError:
+        client = FastEmbedClient()
+        client.get_sentence_embedding_dimension()
+        return client
 
 
 def _build_custom_client():
