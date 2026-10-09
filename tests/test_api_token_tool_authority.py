@@ -148,6 +148,11 @@ async def test_delegated_http_fetch_retains_existing_policy(tmp_path, monkeypatc
     seen = []
     url = f"{scheme}://example.com/public"
 
+    # LOCAL FORK: the approval gate now defaults off for single-user local
+    # installs (upstream default was on); this test pins the delegated
+    # credential egress policy, which is enforced while the gate is enabled.
+    monkeypatch.setattr("src.tool_capabilities.TOOL_APPROVAL_GATE_ENABLED", True)
+
     def fetch(source, **kwargs):
         seen.append(source)
         return {"content": "public fixture content", "title": "Public"}

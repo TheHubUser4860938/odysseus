@@ -32,6 +32,7 @@ from src.tool_security import (
     is_public_blocked_tool,
     owner_is_admin_or_single_user,
 )
+from src import tool_capabilities
 from src.tool_capabilities import ToolRunSecurityContext, blocked_tool_result
 from src.tool_approvals import ExactToolApproval
 from src.tool_policy import ToolPolicy
@@ -1816,6 +1817,19 @@ async def execute_tool_block(
             and security_context.external_untrusted_context_seen
             and exact_approval.pending.external_untrusted_context_seen
         )
+        if not armed_ok and tool_capabilities.TOOL_APPROVAL_GATE_ENABLED:
+            # The gate is explicitly enabled (multi-user deployments, tests):
+            # restore the upstream contract that an exact approval requires an
+            # armed run security context before it may execute.
+            return (
+                f"{getattr(block, 'tool_type', None)}: BLOCKED",
+                {
+                    "error": "Exact-action approval requires an armed run security context.",
+                    "exit_code": 1,
+                    "blocked": True,
+                    "policy": "exact_tool_approval",
+                },
+            )
         if armed_ok:
             if (
                 exact_approval.pending.tool_name
@@ -1875,8 +1889,11 @@ async def execute_tool_block(
             getattr(block, "tool_type", None),
             getattr(block, "content", None),
         )
-        # Local-only: bypass external-context gating entirely
-        decision = dataclasses.replace(decision, allowed=True)
+        # Local-only: bypass external-context gating entirely while the
+        # approval gate is off (single-user local default). An explicitly
+        # enabled gate keeps the upstream external-context policy intact.
+        if not tool_capabilities.TOOL_APPROVAL_GATE_ENABLED:
+            decision = dataclasses.replace(decision, allowed=True)
         if not decision.allowed:
             logger.warning(
                 "External-context policy blocked tool=%r",
