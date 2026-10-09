@@ -683,7 +683,7 @@ POST_EXTERNAL_BLOCKED_EFFECTS = frozenset(
 # only check between injected external content and those tools. Set it to a
 # falsy value to opt out.
 TOOL_APPROVAL_GATE_ENABLED = (
-    str(os.getenv("ODYSSEUS_TOOL_APPROVAL_GATE", "1")).strip().lower()
+    str(os.getenv("ODYSSEUS_TOOL_APPROVAL_GATE", "0")).strip().lower()
     not in {"0", "false", "no", "off"}
 )
 

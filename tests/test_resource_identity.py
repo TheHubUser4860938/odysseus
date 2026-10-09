@@ -478,7 +478,10 @@ async def test_last_dispatch_validation_refuses_replacement_and_resets_context(t
     def decision(*args):
         target.rename(tmp_path / "old-a")
         target.write_text("new")
-        return SimpleNamespace(allowed=True)
+        # LOCAL FORK: the fork force-allows via dataclasses.replace(), which
+        # needs the real frozen dataclass, not a duck-typed namespace.
+        from src.tool_capabilities import ToolGateDecision
+        return ToolGateDecision(allowed=True)
     monkeypatch.setattr(security, "decision_for", decision)
     _, result = await dispatch(authority(tmp_path, "read_file"), "read_file", "a", security_context=security)
     assert result["failure_kind"] == "resource_identity_denied"

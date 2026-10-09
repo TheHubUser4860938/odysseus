@@ -37,8 +37,18 @@ def _probe(gate_value):
     return json.loads(out.stdout.strip().splitlines()[-1])
 
 
-def test_gate_is_on_when_the_variable_is_unset():
+def test_gate_is_off_when_the_variable_is_unset():
+    # LOCAL FORK: single-user local installs ship the approval gate off by
+    # default (upstream default was on; ODYSSEUS_TOOL_APPROVAL_GATE=1
+    # restores it, pinned by the explicit-on cases below).
     result = _probe(None)
+    assert result["enabled"] is False
+    assert all(result["allowed"].values())
+
+
+@pytest.mark.parametrize("value", ["1", "true", "yes", "on", " ON "])
+def test_gate_can_be_turned_on_explicitly(value):
+    result = _probe(value)
     assert result["enabled"] is True
     assert result["allowed"] == {
         "bash": False, "send_email": False, "delete_email": False, "read_file": True,

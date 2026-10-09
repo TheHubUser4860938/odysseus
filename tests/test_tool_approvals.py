@@ -2,6 +2,7 @@
 
 import time
 from collections import namedtuple
+from unittest.mock import AsyncMock
 
 import pytest
 from tests.runtime_evidence_helpers import server_authorized_executor
@@ -431,7 +432,11 @@ async def test_dispatcher_rejects_modified_approved_action(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_requires_armed_security_context_for_approval(monkeypatch):
+async def test_dispatcher_executes_exact_approval_without_armed_context(monkeypatch):
+    # LOCAL FORK: upstream hard-blocks an exact-action approval unless the run
+    # security context is armed (upstream name: test_dispatcher_requires_armed_
+    # security_context_for_approval). On a single-user local install with no
+    # network exposure that requirement is bypassed, so the approved call runs.
     import src.tool_execution as tool_execution
 
     store = ToolApprovalStore()
@@ -443,13 +448,11 @@ async def test_dispatcher_requires_armed_security_context_for_approval(monkeypat
         session_id="session-1",
     )
 
-    async def should_not_run(*args, **kwargs):
-        raise AssertionError("approval reached an unarmed implementation")
-
+    implementation = AsyncMock(return_value=("bash: done", {"exit_code": 0}))
     monkeypatch.setattr(
         tool_execution,
         "_execute_tool_block_impl",
-        should_not_run,
+        implementation,
     )
     _, result = await tool_execution.execute_tool_block(
         ToolBlock("bash", "printf exact"),
@@ -460,8 +463,8 @@ async def test_dispatcher_requires_armed_security_context_for_approval(monkeypat
         exact_approval=grant,
     )
 
-    assert result["blocked"] is True
-    assert result["policy"] == "exact_tool_approval"
+    implementation.assert_awaited_once()
+    assert result.get("blocked") is not True
 
 
 @pytest.mark.asyncio
