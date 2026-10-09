@@ -550,9 +550,16 @@ def test_browse_marks_root_unselectable_and_vet_endpoint(monkeypatch):
     out = browse(request=object(), path=os.path.expanduser("~"))
     assert out["selectable"] is True
 
-    assert vet(request=object(), path="/") == {"ok": False, "path": None}
+    # LOCAL FORK (trusted-operator build): /vet gained a "warning" field that
+    # names ODYSSEUS_DATA_DIR when the chosen root strictly contains the app
+    # data dir; it warns instead of refusing, so home stays selectable.
+    from src.tool_execution import workspace_contains_data_dir
+
+    assert vet(request=object(), path="/") == {"ok": False, "path": None, "warning": None}
     home = os.path.realpath(os.path.expanduser("~"))
-    assert vet(request=object(), path="~") == {"ok": True, "path": home}
+    assert vet(request=object(), path="~") == {
+        "ok": True, "path": home, "warning": workspace_contains_data_dir(home),
+    }
 
     from fastapi import HTTPException
     monkeypatch.setattr(wr, "owner_is_admin_or_single_user", lambda owner: False)
