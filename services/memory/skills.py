@@ -613,6 +613,10 @@ class SkillsManager:
     # ----------------------------------------------------------------------
 
     def read_skill_md(self, name: str, owner: Optional[str] = None) -> Optional[str]:
+        """Read full SKILL.md for one skill by name.
+        
+        Ownership: only enforced when owner is explicitly passed (not None).
+        """
         for path in self._iter_skill_files():
             sk = self._read_skill(path)
             if not sk or sk.name != name:
@@ -622,8 +626,10 @@ class SkillsManager:
             # reads must apply the same visibility rule as the index/list
             # path. Previously a built-in appeared in `list` but `view`
             # returned not-found for authenticated users.
-            if not (
-                (sk.owner or "") == (owner or "")
+            # Local addition: with owner=None the caller opted out of owner
+            # filtering entirely (single-user / internal reads).
+            if owner is not None and not (
+                (sk.owner or "") == owner
                 or (sk.source == "builtin" and not (sk.owner or ""))
             ):
                 continue
@@ -636,13 +642,16 @@ class SkillsManager:
 
     def read_skill_reference(self, name: str, ref_path: str, owner: Optional[str] = None) -> Optional[str]:
         """Read a sub-file under the skill's directory (references/, etc).
-        Refuses path traversal."""
+        Refuses path traversal.
+        
+        Ownership: only enforced when owner is explicitly passed (not None).
+        """
         for path in self._iter_skill_files():
             sk = self._read_skill(path)
             if not sk or sk.name != name:
                 continue
-            if not (
-                (sk.owner or "") == (owner or "")
+            if owner is not None and not (
+                (sk.owner or "") == owner
                 or (sk.source == "builtin" and not (sk.owner or ""))
             ):
                 continue

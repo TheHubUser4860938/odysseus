@@ -182,7 +182,9 @@ def test_update_skill_scalar_keys_exclude_owner():
 def test_read_skill_md_and_references_are_owner_scoped(tmp_path):
     """Two users own distinct skills with the same slug. read_skill_md()
     called with owner='alice' must return Alice's content, not Bob's.
-    Called without an owner it must match only ownerless skills."""
+    LOCAL FORK: called without an owner the read is an explicit opt-out of
+    owner filtering (single-user / internal callers), so it matches any
+    skill with that slug."""
     skills_root = tmp_path / "skills"
     skills_root.mkdir(parents=True, exist_ok=True)
     alice_path = _write_skill_md(
@@ -207,11 +209,15 @@ def test_read_skill_md_and_references_are_owner_scoped(tmp_path):
     assert bob_md is not None, "read_skill_md returned None for bob's skill"
     assert "bob secret" in bob_md
 
+    # LOCAL FORK: owner=None means the caller opted out of owner filtering
+    # (see services/memory/skills.py), so a no-owner read returns the skill
+    # regardless of ownership instead of matching only ownerless skills.
     no_owner_md = sm.read_skill_md("login-flow")
-    assert no_owner_md is None, (
-        "read_skill_md without owner matched an owned skill — "
-        "default should only match ownerless skills."
+    assert no_owner_md is not None, (
+        "read_skill_md without owner should match any skill with the slug "
+        "(opt-out semantics)."
     )
+    assert "secret" in no_owner_md
     assert sm.read_skill_md("login-flow", owner="charlie") is None
     assert sm.read_skill_reference("login-flow", "references/notes.txt", owner="bob") == "bob private notes"
     assert sm.read_skill_reference("login-flow", "references/notes.txt", owner="alice") is None
