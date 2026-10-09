@@ -20,7 +20,13 @@ def _skill(name, description, tags):
             "tags": tags, "procedure": [], "status": "published"}
 
 
-def test_tag_substring_does_not_boost(tmp_path):
+def test_tag_substring_does_not_boost(tmp_path, monkeypatch):
+    # LOCAL FORK: the FastEmbed client is a process-wide singleton now, so the
+    # semantic channel (default on) can score this pair and boost the skill in
+    # any ordering where a model is already loaded. This test pins the
+    # keyword/tag token contract, so pin semantic retrieval off for
+    # determinism.
+    monkeypatch.setenv("ODYSSEUS_SKILL_SEMANTIC_RETRIEVAL", "0")
     sm = SkillsManager(str(tmp_path))
     skills = [_skill("ml-helper", "machine learning helper", ["ai"])]
     # "ai" appears only as a substring of "email", not as a whole token, so it
