@@ -54,7 +54,8 @@ def setup_workspace_routes():
         dirs_sorted = sorted(dirs, key=lambda d: d["name"].lower())
         truncated = len(dirs_sorted) > _MAX_BROWSE_DIRS
         parent = os.path.dirname(target)
-        from src.tool_execution import vet_workspace
+        from src.tool_execution import vet_workspace, workspace_contains_data_dir
+        selectable = vet_workspace(target)
         return {
             "path": target,
             "parent": parent if parent and parent != target else None,
@@ -62,7 +63,10 @@ def setup_workspace_routes():
             "truncated": truncated,
             # Whether this directory may be bound as a workspace (filesystem
             # roots and sensitive dirs may be browsed through but not chosen).
-            "selectable": vet_workspace(target) is not None,
+            "selectable": selectable is not None,
+            # Non-fatal: the app's data dir sits inside this folder, so process
+            # tools are limited there for non-operators. Warn, never refuse.
+            "warning": workspace_contains_data_dir(selectable),
         }
 
     @router.get("/vet")
@@ -78,9 +82,10 @@ def setup_workspace_routes():
         owner = get_current_user(request)
         if not owner_is_admin_or_single_user(owner):
             raise HTTPException(status_code=403, detail="Workspace selection is admin-only")
-        from src.tool_execution import vet_workspace
+        from src.tool_execution import vet_workspace, workspace_contains_data_dir
         resolved = vet_workspace(path)
-        return {"ok": resolved is not None, "path": resolved}
+        return {"ok": resolved is not None, "path": resolved,
+                "warning": workspace_contains_data_dir(resolved) if resolved else None}
 
     @router.get("/default")
     def default_workspace(request: Request):

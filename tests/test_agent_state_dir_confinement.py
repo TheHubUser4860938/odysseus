@@ -1117,3 +1117,133 @@ def test_no_rg_worker_exit_before_first_record_is_reported_promptly(tmp_path, mo
 
     assert result == {"error": "grep: fallback worker exited 71", "exit_code": 1}
     assert time.monotonic() - started < 1
+
+
+# ── Launch guard: trusted local operator on an ancestor boundary ─────
+#
+# guard_launch_workspace() refuses a launch boundary that merely CONTAINS
+# execution control state. A chat workspace bound at the repo root (or the
+# home directory) is an ANCESTOR of DATA_DIR, so every bash/python/job launch
+# is refused even though the boundary is the operator's own box. The bypass
+# must fire only for a trusted local operator AND only for a boundary that is
+# a strict ancestor of DATA_DIR; a boundary that IS DATA_DIR stays refused.
+
+def _operator_control_tree(monkeypatch, tmp_path):
+    """Point every control-state path at <tmp>/data and return (parent, data).
+
+    ``parent`` is a strict ancestor of the data dir (the repo-root / home
+    shape); ``data`` is DATA_DIR itself. The guard reads these attributes at
+    call time, so monkeypatching the modules steers its control tuple.
+    """
+    from pathlib import Path
+    data = tmp_path / "data"
+    (data / "process_resources").mkdir(parents=True)
+    (data / "bg_jobs").mkdir()
+    (data / "browser_resources").mkdir()
+    for name in ("app.db", "auth.json", "settings.json", "bg_jobs.json",
+                 "containment_grants.json"):
+        (data / name).write_text("x")
+    constants = importlib.import_module("src.constants")
+    bg_jobs = importlib.import_module("src.bg_jobs")
+    containment = importlib.import_module("src.containment")
+    process_resources = importlib.import_module("src.agent_runtime.process_resources")
+    browser_identity = importlib.import_module("src.browser_identity")
+    for name in ("DATA_DIR", "APP_DB", "AUTH_FILE", "SETTINGS_FILE",
+                 "BROWSER_RESOURCES_DIR", "PROCESS_RESOURCES_DIR",
+                 "BG_JOBS_FILE", "BG_JOBS_DIR", "CONTAINMENT_STATE_FILE"):
+        rel = {"APP_DB": "app.db", "AUTH_FILE": "auth.json",
+               "SETTINGS_FILE": "settings.json", "BG_JOBS_FILE": "bg_jobs.json",
+               "BG_JOBS_DIR": "bg_jobs", "CONTAINMENT_STATE_FILE": "containment_grants.json",
+               "BROWSER_RESOURCES_DIR": "browser_resources",
+               "PROCESS_RESOURCES_DIR": "process_resources"}.get(name, "")
+        monkeypatch.setattr(constants, name,
+                            str(data if name == "DATA_DIR" else data / rel), raising=False)
+    monkeypatch.setattr(bg_jobs, "_STORE", data / "bg_jobs.json", raising=False)
+    monkeypatch.setattr(bg_jobs, "_JOBS_DIR", data / "bg_jobs", raising=False)
+    monkeypatch.setattr(containment, "_store_path", lambda: data / "containment_grants.json", raising=False)
+    monkeypatch.setattr(process_resources, "_LAUNCH_DIR", data / "process_resources", raising=False)
+    monkeypatch.setattr(browser_identity, "STATE_ROOT", data / "browser_resources", raising=False)
+    return tmp_path, data
+
+
+def _active_operator(monkeypatch, trusted):
+    """Make the guard see an active authority with the given trusted flag."""
+    from types import SimpleNamespace
+    authority = importlib.import_module("src.agent_runtime.authority")
+    monkeypatch.setattr(authority, "active_request_authority",
+                        lambda: SimpleNamespace(trusted_operator=trusted))
+
+
+def test_launch_guard_refuses_an_ancestor_boundary_without_an_operator(tmp_path, monkeypatch):
+    from src.agent_runtime.process_resources import guard_launch_workspace
+    from src.agent_runtime.resources import FilesystemRoot, ResourceIdentityError
+    parent, _ = _operator_control_tree(monkeypatch, tmp_path)
+    _active_operator(monkeypatch, None)  # no active authority (direct/test call)
+    with pytest.raises(ResourceIdentityError, match="control state"):
+        guard_launch_workspace(FilesystemRoot.seal(parent))
+
+
+def test_launch_guard_operator_bypass_fires_for_a_strict_ancestor(tmp_path, monkeypatch):
+    from src.agent_runtime.process_resources import guard_launch_workspace
+    from src.agent_runtime.resources import FilesystemRoot
+    parent, _ = _operator_control_tree(monkeypatch, tmp_path)
+    _active_operator(monkeypatch, True)
+    assert guard_launch_workspace(FilesystemRoot.seal(parent)) is None
+
+
+def test_launch_guard_operator_bypass_does_not_fire_for_the_data_directory_itself(tmp_path, monkeypatch):
+    from src.agent_runtime.process_resources import guard_launch_workspace
+    from src.agent_runtime.resources import FilesystemRoot, ResourceIdentityError
+    _, data = _operator_control_tree(monkeypatch, tmp_path)
+    _active_operator(monkeypatch, True)  # trusted, but boundary IS DATA_DIR
+    with pytest.raises(ResourceIdentityError, match="control state"):
+        guard_launch_workspace(FilesystemRoot.seal(data))
+
+
+def test_launch_guard_operator_bypass_does_not_fire_for_an_untrusted_caller(tmp_path, monkeypatch):
+    from src.agent_runtime.process_resources import guard_launch_workspace
+    from src.agent_runtime.resources import FilesystemRoot, ResourceIdentityError
+    parent, _ = _operator_control_tree(monkeypatch, tmp_path)
+    _active_operator(monkeypatch, False)  # delegated token / non-loopback / non-admin
+    with pytest.raises(ResourceIdentityError, match="control state"):
+        guard_launch_workspace(FilesystemRoot.seal(parent))
+
+
+def test_launch_guard_still_refuses_the_real_repo_root_with_no_operator():
+    """The live deployment: workspace == repo root, an ancestor of the real
+    DATA_DIR. Without a trusted operator it must refuse (deny-by-default)."""
+    from pathlib import Path
+    from src.agent_runtime.process_resources import guard_launch_workspace
+    from src.agent_runtime.resources import FilesystemRoot, ResourceIdentityError
+    repo_root = str(Path(DATA_DIR).resolve().parent)
+    with pytest.raises(ResourceIdentityError, match="control state"):
+        guard_launch_workspace(FilesystemRoot.seal(repo_root))
+
+
+def test_trusted_operator_file_tools_reach_repo_root(tmp_path, monkeypatch):
+    """A trusted operator's file tools may reach an absolute path under the
+    repo root (a strict ancestor of DATA_DIR), mirroring the launch-guard
+    ancestor rule; a non-operator stays confined to the workspace."""
+    import json
+    from src import constants
+    from src.agent_runtime.authority import create_request_authority, ExactOperation
+    from src.agent_runtime.resource_binding import resolve_filesystem_operation
+    parent, data = _operator_control_tree(monkeypatch, tmp_path)  # DATA_DIR -> tmp/data
+    monkeypatch.setattr(constants, "BASE_DIR", str(tmp_path), raising=False)  # app root -> tmp
+    workspace = data / "workspace"
+    workspace.mkdir(parents=True)
+    outside = parent / "repo_src" / "mod.py"   # under the repo root, outside the workspace
+    outside.parent.mkdir(parents=True)
+    outside.write_text("def guard_launch_workspace(): ...")
+    op = ExactOperation.normalize("read_file", json.dumps({"path": str(outside)}))
+
+    trusted = create_request_authority("read the module", owner="alice",
+                                       workspace=str(workspace), trusted_operator=True)
+    resolve_filesystem_operation(op, roots=trusted.resource_roots,
+                                 workspace=str(workspace))  # must not raise
+
+    plain = create_request_authority("read the module", owner="alice",
+                                     workspace=str(workspace), trusted_operator=False)
+    with pytest.raises(ValueError):
+        resolve_filesystem_operation(op, roots=plain.resource_roots,
+                                     workspace=str(workspace))

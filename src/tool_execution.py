@@ -1204,6 +1204,25 @@ def vet_workspace(raw: str) -> Optional[str]:
     return resolved
 
 
+def workspace_contains_data_dir(resolved: Optional[str]) -> Optional[str]:
+    """Warn (do not refuse) when a workspace root strictly contains DATA_DIR.
+
+    A workspace bound at the repo root or the home directory is an ancestor of
+    the app's data directory. That is survivable for a trusted local operator,
+    but it used to silently refuse every process launch. Return a warning that
+    names ODYSSEUS_DATA_DIR, or None when the data dir is not inside the root.
+    """
+    if not resolved:
+        return None
+    data_dir = os.path.realpath(str(DATA_DIR))
+    root = os.path.realpath(resolved)
+    if data_dir == root or not data_dir.startswith(root + os.sep):
+        return None
+    return ("This workspace contains the app's data directory. Process tools "
+            "are limited there unless you are the local operator; set "
+            "ODYSSEUS_DATA_DIR to relocate the data directory elsewhere.")
+
+
 def agent_cwd() -> str:
     """Working directory for agent subprocesses (bash/python/background jobs):
     a validated sealed launch root, active workspace, or agent workspace."""
@@ -1743,7 +1762,9 @@ async def execute_tool_block(
             await revalidate_browser_operation(browser_operation)
         if needs_process_binding(operation, backend_operation.resource):
             if pending is not None and pending.process_operation is None:
-                raise ResourceIdentityError("Approved action has no sealed process/job identity")
+                raise ResourceIdentityError(
+                    pending.process_operation_denial
+                    or "Approved action has no sealed process/job identity")
             process_operation = resolve_process_operation(authority, operation, backend_operation.resource,
                 approved=pending.process_operation if pending is not None else None, exact_admission=exact_admission)
         if needs_owned_binding(operation) and not external_resource_call:

@@ -77,7 +77,10 @@ export async function vetAndSetWorkspace(path) {
     const data = await res.json();
     if (data.ok && data.path) {
       setWorkspace(data.path);
-      return { ok: true, path: data.path };
+      // Non-fatal caveat: the app's data dir lives inside this workspace, so
+      // process tools stay limited there unless you are the local operator.
+      if (data.warning && uiModule && uiModule.showToast) uiModule.showToast(data.warning);
+      return { ok: true, path: data.path, warning: data.warning || null };
     }
     return { ok: false, path: null };
   } catch (e) {
@@ -143,7 +146,8 @@ function _render(data) {
   const useBtn = _modal.querySelector('#workspace-use');
   if (useBtn) {
     useBtn.disabled = data.selectable === false;
-    useBtn.title = data.selectable === false ? 'This folder cannot be used as a workspace' : '';
+    useBtn.title = data.selectable === false ? 'This folder cannot be used as a workspace'
+      : (data.warning || '');
   }
 }
 

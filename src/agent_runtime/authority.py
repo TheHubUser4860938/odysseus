@@ -127,6 +127,10 @@ class RequestAuthority:
     job_resources: tuple[BackgroundJobResource, ...] | None = None
     browser_sessions: tuple[BrowserSessionResource, ...] | None = None
     browser_pages: tuple[BrowserPageResource, ...] | None = None
+    # Trusted local operator: a direct loopback admin/single-user request that is
+    # NOT a delegated credential. Resolved once at request entry and read by the
+    # launch guard and the grant builder. Deny-by-default for everyone else.
+    trusted_operator: bool = False
 
     def __post_init__(self):
         if (not isinstance(self.request_id, str) or not self.request_id
@@ -136,7 +140,8 @@ class RequestAuthority:
                 or len({g.tool for g in self.grants}) != len(self.grants)
                 or not isinstance(self.denied, frozenset)
                 or any(not isinstance(n, str) or canonical_tool(n) != n for n in self.denied)
-                or any(type(v) is not bool for v in (self.block_all, self.disable_mcp, self.inherited))):
+                or any(type(v) is not bool for v in
+                       (self.block_all, self.disable_mcp, self.inherited, self.trusted_operator))):
             raise ValueError("Malformed request authority")
         if self.resource_roots is None:
             roots = ()
@@ -210,7 +215,17 @@ class RequestAuthority:
                                          or operation.transport_tool.startswith("mcp__"))))
 
     def permits(self, operation):
-        return not self.restricted(operation) and any(g.permits(operation) for g in self.grants)
+        if self.restricted(operation):
+            return False
+        if any(g.permits(operation) for g in self.grants):
+            return True
+        # A trusted local operator's own MCP servers are offered by the router
+        # but belong to no static capability family, so they never appear in the
+        # grant set. Admit them here -- the operator owns the box -- while
+        # disable_mcp (already handled as ``restricted`` above) still denies.
+        return bool(self.trusted_operator and (
+            operation.tool.startswith("mcp__")
+            or operation.transport_tool.startswith("mcp__")))
 
     def restrict(self, policy=None, disabled_tools=()):
         policy = policy or ToolPolicy()
@@ -269,6 +284,7 @@ class RequestAuthority:
                             "inputs": None if g.inputs is None else sorted(g.inputs)} for g in self.grants],
                 "denied": sorted(self.denied), "block_all": self.block_all,
                 "disable_mcp": self.disable_mcp, "inherited": self.inherited,
+                "trusted_operator": self.trusted_operator,
                 "resource_roots": [r.to_dict() for r in self.resource_roots],
                 "backend_resources": [r.to_dict() for r in self.backend_resources],
                 "owned_scopes": [s.to_dict() for s in self.owned_scopes],
@@ -312,7 +328,8 @@ class RequestAuthority:
                    tuple(ProcessResource.from_dict(r) for r in process_fields["process_resources"]),
                    tuple(BackgroundJobResource.from_dict(r) for r in process_fields["job_resources"]),
                    tuple(BrowserSessionResource.from_dict(r) for r in value["browser_sessions"]) if value["version"] >= 5 else (),
-                   tuple(BrowserPageResource.from_dict(r) for r in value["browser_pages"]) if value["version"] >= 5 else ())
+                   tuple(BrowserPageResource.from_dict(r) for r in value["browser_pages"]) if value["version"] >= 5 else (),
+                    trusted_operator=bool(value.get("trusted_operator", False)))
 
 
 _BROWSER_READ_ACTIONS = frozenset({"open", "navigate", "snapshot", "text", "read", "find",
@@ -363,12 +380,20 @@ def interpret_request(request_text, *, history=(), workspace=None, active_docume
 
 def create_request_authority(request_text, *, owner=None, session_id=None, workspace=None,
                              history=(), policy=None, active_document=False,
-                             image_attachment=False, capabilities=None, client_runtime_context=None):
+                             image_attachment=False, capabilities=None, client_runtime_context=None,
+                             trusted_operator=False):
     """Deterministic server policy over semantic facts, never schema inventory."""
     if not isinstance(request_text, str):
         raise TypeError("Authority requires trusted request text")
-    intent = interpret_request(request_text, history=history, active_document=active_document,
-                               workspace=workspace, image_attachment=image_attachment)
+    if trusted_operator:
+        # Trusted local operator: grant the turn's tool set rather than the
+        # phrasing-derived intent subset. The effective policy applied below
+        # still trims what the operator disabled this turn, so this is not a
+        # no-op; it only stops a short prompt being read as a narrow request.
+        intent = SemanticIntent(frozenset(FAMILY_TOOLS), None, None)
+    else:
+        intent = interpret_request(request_text, history=history, active_document=active_document,
+                                   workspace=workspace, image_attachment=image_attachment)
     families = intent.capabilities
     if capabilities is not None:
         families |= frozenset(capabilities)
@@ -398,7 +423,24 @@ def create_request_authority(request_text, *, owner=None, session_id=None, works
             inputs = frozenset({ExactOperation.normalize(name, _json(dict(operation.args))).input})
         grants.append(OperationGrant(name, actions, inputs))
     authority = RequestAuthority(uuid4().hex, _owner(owner), str(session_id or ""),
-                                 str(workspace or ""), tuple(grants))
+                                 str(workspace or ""), tuple(grants), trusted_operator=trusted_operator)
+    if trusted_operator:
+        # The operator's file tools are confined to the request workspace by
+        # default. Widen to the app root (the sanctioned BASE_DIR constant; in
+        # the default layout the repo root, a strict ancestor of the data dir)
+        # so an absolute path under the operator's own tree resolves. Relative
+        # paths still join to the workspace, so the harness should declare the
+        # repo as workspace_root for relative greps; this is an absolute-path
+        # backstop. Control-state files under the app root remain masked by the
+        # native filesystem layer, so this widening does not expose app state.
+        from src import constants
+        try:
+            boundary = Path(constants.BASE_DIR).resolve()
+            authority = replace(authority, resource_roots=tuple(dict.fromkeys(
+                (*authority.resource_roots,
+                 FilesystemRoot.seal(str(boundary), owner=authority.owner)))))
+        except (OSError, ValueError, RuntimeError):
+            pass
     if client_runtime_context is not None:
         from src.agent_runtime.remote_resources import seal_backends
         authority = replace(authority, backend_resources=seal_backends(
@@ -414,6 +456,16 @@ def active_request_authority():
     return _ACTIVE.get()
 
 
+def trusted_operator_active():
+    """True when the active request authority is a trusted local operator.
+
+    Every layer reads this single resolved flag rather than re-deriving the
+    predicate, so the launch guard and the grant builder cannot drift apart.
+    """
+    authority = active_request_authority()
+    return bool(authority is not None and getattr(authority, "trusted_operator", False))
+
+
 def is_internal_tool_request(request):
     """HTTP authentication/owner attribution does not make a tool payload user intent."""
     from core.middleware import INTERNAL_TOOL_HEADER, INTERNAL_TOOL_TOKEN
@@ -427,12 +479,30 @@ def require_user_approval_request(request):
         raise HTTPException(403, "Tool requests cannot submit user approval decisions.")
 
 
+def _trusted_local_operator(request, owner):
+    """Direct loopback AND (admin OR auth-disabled single-user) AND NOT delegated.
+
+    Reuses the existing predicates rather than inventing a parallel check. A
+    minted bearer token never inherits the shell merely because its owner is an
+    admin, and a caller behind a proxy/LAN is not loopback. Fails closed.
+    """
+    try:
+        from src.auth_helpers import is_delegated_credential, is_direct_loopback_request
+        from src.tool_security import owner_is_admin_or_single_user
+        return bool(is_direct_loopback_request(request)
+                    and not is_delegated_credential(request)
+                    and owner_is_admin_or_single_user(owner))
+    except Exception:
+        return False
+
+
 def request_authority_for_http(request, request_text, **context):
     """Known tool loopback is a continuation, never a fresh user grant source."""
     if is_internal_tool_request(request):
         return RequestAuthority.empty(owner=context.get("owner"),
             session_id=context.get("session_id"), workspace=context.get("workspace")).restrict(context.get("policy"))
-    return create_request_authority(request_text, **context)
+    return create_request_authority(request_text, trusted_operator=_trusted_local_operator(
+        request, context.get("owner")), **context)
 
 
 @contextmanager

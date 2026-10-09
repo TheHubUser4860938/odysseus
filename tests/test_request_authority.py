@@ -64,6 +64,25 @@ def test_explicit_request_classes_remain_narrow(user_text, allowed, denied):
     assert not grant.permits(ExactOperation.normalize(denied, '{}'))
 
 
+def test_trusted_operator_permits_mcp_tools_that_no_family_grants():
+    # MCP tool names are dynamic and are members of no static capability family,
+    # so they never enter the grant set -- the router offers them but the
+    # operator authority refused them ("outside server request authority").
+    op = ExactOperation.normalize("mcp__7455b8d2__shell_execute", '{"command":"echo ok"}')
+    trusted = create_request_authority("run a shell probe", owner="alice",
+                                       workspace="/tmp", trusted_operator=True)
+    assert trusted.permits(op)
+    # A non-operator request still cannot execute the MCP tool.
+    plain = create_request_authority("run a shell probe", owner="alice",
+                                     workspace="/tmp", trusted_operator=False)
+    assert not plain.permits(op)
+    # The operator bypass is not a no-op: an explicit disable_mcp policy denies.
+    disabled = create_request_authority("run a shell probe", owner="alice",
+                                        workspace="/tmp", trusted_operator=True,
+                                        policy=ToolPolicy(disable_mcp=True))
+    assert not disabled.permits(op)
+
+
 def test_safe_task_read_does_not_authorize_same_tool_mutation():
     grant = create_request_authority("List my tasks")
     assert grant.permits(ExactOperation.normalize("manage_tasks", '{"action":"list"}'))
@@ -586,3 +605,78 @@ async def test_authority_denial_cannot_create_completion_receipt(monkeypatch):
     assert journal.actions[0].execution_id is None
     assert journal.actions[0].outcome["authoritative"] is False
     assert journal.actions[0].outcome["blocked"] is True
+
+
+# ── Trusted local operator: one predicate, one resolution ────────────
+#
+# A loopback admin/operator must not be deny-by-defaulted by the per-turn
+# intent classifier or the multi-user launch guard. The operator condition is
+# direct loopback AND (auth disabled OR admin) AND NOT a delegated credential.
+
+def _loopback_request(*, host="127.0.0.1", api_token=False):
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        client=SimpleNamespace(host=host),
+        headers={},
+        base_url="http://127.0.0.1:7000/",
+        state=SimpleNamespace(api_token=api_token, current_user="alice"),
+    )
+
+
+def _as_admin(monkeypatch, admin=True):
+    import src.tool_security as tool_security
+    monkeypatch.setattr(tool_security, "owner_is_admin_or_single_user", lambda owner: admin)
+
+
+def test_trusted_operator_flag_set_for_loopback_admin(monkeypatch):
+    _as_admin(monkeypatch, True)
+    grant = request_authority_for_http(_loopback_request(), "run: pwd",
+        owner="alice", session_id="s", workspace="/home/box/repo")
+    assert grant.trusted_operator is True
+
+
+@pytest.mark.parametrize("host,api_token,admin,why", [
+    ("127.0.0.1", True, True, "delegated bearer token: owner is admin, still not trusted"),
+    ("10.0.0.5", False, True, "non-loopback caller behind a proxy/LAN"),
+    ("127.0.0.1", False, False, "loopback but not an admin with auth enabled"),
+])
+def test_trusted_operator_flag_not_set_for_untrusted_callers(monkeypatch, host, api_token, admin, why):
+    _as_admin(monkeypatch, admin)
+    grant = request_authority_for_http(_loopback_request(host=host, api_token=api_token),
+        "run: pwd", owner="alice", session_id="s", workspace="/home/box/repo")
+    assert grant.trusted_operator is False, why
+
+
+def test_trusted_operator_grants_the_turn_tool_set_for_a_short_prompt(monkeypatch):
+    _as_admin(monkeypatch, True)
+    grant = request_authority_for_http(_loopback_request(), "list my tasks",
+        owner="alice", session_id="s", workspace="/home/box/repo")
+    assert grant.permits(ExactOperation.normalize("bash", "pwd"))
+    assert grant.permits(ExactOperation.normalize("grep", '{"path":"src","pattern":"x"}'))
+    assert grant.permits(ExactOperation.normalize("read_file", '{"path":"src/app.py"}'))
+
+
+def test_non_operator_stays_deny_by_default_for_the_same_short_prompt():
+    # No request/operator path: the plain factory keeps the narrow intent subset.
+    grant = create_request_authority("list my tasks", owner="bob", workspace="/home/box/repo")
+    assert grant.trusted_operator is False
+    assert not grant.permits(ExactOperation.normalize("bash", "pwd"))
+
+
+def test_trusted_operator_is_not_a_noop_policy_still_trims(monkeypatch):
+    _as_admin(monkeypatch, True)
+    grant = request_authority_for_http(_loopback_request(), "run: pwd",
+        owner="alice", session_id="s", workspace="/home/box/repo",
+        policy=ToolPolicy(disabled_tools={"bash"}))
+    assert grant.trusted_operator is True
+    assert not grant.permits(ExactOperation.normalize("bash", "pwd"))  # user disabled it
+    assert grant.permits(ExactOperation.normalize("grep", '{"path":"src","pattern":"x"}'))
+
+
+def test_trusted_operator_survives_serialization_round_trip():
+    grant = RequestAuthority("r1", "alice", "s", "/repo", (OperationGrant("bash"),),
+                             trusted_operator=True)
+    assert RequestAuthority.from_dict(grant.to_dict()).trusted_operator is True
+    plain = RequestAuthority("r2", "alice", "s", "/repo", (OperationGrant("bash"),))
+    assert plain.trusted_operator is False
+    assert RequestAuthority.from_dict(plain.to_dict()).trusted_operator is False

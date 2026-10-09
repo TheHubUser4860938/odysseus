@@ -192,6 +192,10 @@ class PendingToolApproval:
     owned_operation: BoundOwnedOperation | None = None
     process_operation: BoundProcessOperation | None = None
     browser_operation: BoundBrowserOperation | None = None
+    # Why the process operation could NOT be sealed at propose time. Server-only
+    # (never in the browser payload or the sealed action digest); replay reports
+    # this real reason instead of a generic "no sealed process/job identity".
+    process_operation_denial: str = ""
 
     def public_payload(self, *, reason: str | None = None) -> dict[str, Any]:
         return {
@@ -403,6 +407,7 @@ class ToolApprovalStore:
         owned_operation = None
         process_operation = None
         browser_operation = None
+        process_denial_reason = ""
         from src.agent_runtime.remote_resources import BoundBackendOperation, resolve_backend
         from src.agent_runtime.owned_resources import needs_owned_binding, resolve_owned_operation
         from src.agent_runtime.resources import NativeBackendResource
@@ -417,7 +422,12 @@ class ToolApprovalStore:
                 _normalized_owner(owner), str(session_id or ""), operation.transport_tool, operation.input)
             from src.agent_runtime.process_resources import needs_process_binding, resolve_process_operation
             if request_authority is not None and needs_process_binding(operation, backend):
-                process_operation = resolve_process_operation(request_authority, operation, backend)
+                try:
+                    process_operation = resolve_process_operation(request_authority, operation, backend)
+                except (ValueError, TypeError, OSError, RuntimeError) as error:
+                    # Do not swallow: record the real reason so the UI and replay
+                    # explain why the process launch cannot proceed.
+                    process_denial_reason = str(error) or "Process operation could not be sealed."
             from src.browser_identity import native_browser, resolve_browser_operation
             if native_browser(operation, backend):
                 if request_authority is None:
@@ -501,6 +511,7 @@ class ToolApprovalStore:
             owned_operation=owned_operation,
             process_operation=process_operation,
             browser_operation=browser_operation,
+            process_operation_denial=process_denial_reason,
         )
         with self._lock:
             self._purge_expired_locked(now)

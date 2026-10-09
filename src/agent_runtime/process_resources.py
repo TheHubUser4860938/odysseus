@@ -11,6 +11,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -28,6 +29,7 @@ _LAUNCH_DIR = Path(PROCESS_RESOURCES_DIR)
 LAUNCH_TOOLS = frozenset({"bash", "python"})
 JOB_TOOL = "manage_bg_jobs"
 _ACTIVE = ContextVar("process_resource_operation", default=None)
+logger = logging.getLogger(__name__)
 
 
 def digest(value):
@@ -379,6 +381,13 @@ def require_process_admission(bound):
 def guard_launch_workspace(root):
     """Reject a boundary containing execution control state or its aliases.
 
+    Trusted local operator: a boundary that merely CONTAINS control state (a
+    strict ancestor such as the repo root or the home directory) is admitted,
+    because this guard protects the app from ITSELF, not the operator from an
+    attacker. A boundary that IS the data dir is still refused -- a launch there
+    can delete the app's own state. The bypass reads the operator flag resolved
+    once at request entry; it never re-derives the predicate.
+
     These are pathname/inode observations, not an atomic kernel access policy.
     They do not claim freedom from concurrent link replacement after checking.
     """
@@ -391,6 +400,14 @@ def guard_launch_workspace(root):
                Path(constants.APP_DB), Path(constants.AUTH_FILE), Path(constants.SETTINGS_FILE))
     base = Path(root.path)
     if any(Path(p).resolve().is_relative_to(base) for p in control):
+        from src.agent_runtime.authority import trusted_operator_active
+        base_root = base.resolve()
+        data_dir = Path(constants.DATA_DIR).resolve()
+        if (trusted_operator_active() and data_dir.is_relative_to(base_root)
+                and base_root != data_dir):
+            logger.info("launch guard: trusted local operator admitted boundary %s "
+                        "(contains control state, strict ancestor of the data dir)", base)
+            return
         raise ResourceIdentityError("Launch boundary contains server control state")
     def unresolved(error):
         raise ResourceIdentityError("Launch workspace cannot be inspected") from error
