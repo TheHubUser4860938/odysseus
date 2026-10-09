@@ -756,6 +756,7 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
             "agent_max_rounds": (1, 200),
             "agent_max_tool_calls": (0, 1000),  # 0 = unlimited
             "auto_compact_threshold_percent": (50, 95),
+            "repeat_guard_rounds": (0, 50),     # 0 = guard off entirely
         }
         for key in DEFAULT_SETTINGS:
             if key in RETIRED_SETTING_KEYS:

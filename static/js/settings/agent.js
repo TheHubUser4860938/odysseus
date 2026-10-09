@@ -9,6 +9,7 @@ import { postSettings as _postSettings } from './api.js';
 export async function initAgentSettings() {
   var toolsInput = el('set-agentMaxTools');
   var roundsInput = el('set-agentMaxRounds');
+  var repeatInput = el('set-agentRepeatGuard');
   var supInput = el('set-agentSupervisorLadder');
   var msg = el('set-agentMsg');
   if (!toolsInput) return;
@@ -18,6 +19,7 @@ export async function initAgentSettings() {
     var settings = await res.json();
     if (settings.agent_max_tool_calls) toolsInput.value = settings.agent_max_tool_calls;
     if (roundsInput && settings.agent_max_rounds) roundsInput.value = settings.agent_max_rounds;
+    if (repeatInput && settings.repeat_guard_rounds != null) repeatInput.value = settings.repeat_guard_rounds;
     if (supInput) supInput.checked = !!settings.agent_supervisor_ladder;
   } catch (e) {}
 
@@ -32,15 +34,21 @@ export async function initAgentSettings() {
   async function save() {
     var tools = clampInt(toolsInput.value, 0, 1000, 0);
     var rounds = roundsInput ? clampInt(roundsInput.value, 1, 200, 20) : null;
+    // 0 is a real value here ("guard off"), so only fall back when blank.
+    var repeatRaw = parseInt(repeatInput && repeatInput.value, 10);
+    var repeat = isNaN(repeatRaw) ? 4 : Math.max(0, Math.min(repeatRaw, 50));
     toolsInput.value = tools;                       // reflect the clamped value
     if (roundsInput) roundsInput.value = rounds;
+    if (repeatInput) repeatInput.value = repeat;
     var payload = { agent_max_tool_calls: tools };
     if (rounds != null) payload.agent_max_rounds = rounds;
+    if (repeat != null) payload.repeat_guard_rounds = repeat;
     if (supInput) payload.agent_supervisor_ladder = !!supInput.checked;
     try {
       await _postSettings(payload);
       msg.textContent = (tools > 0 ? 'Limit: ' + tools + ' tool calls' : 'Unlimited tool calls') +
         (rounds != null ? ' · ' + rounds + ' steps/message' : '') +
+        (repeat === 0 ? ' · repeat guard off' : ' · repeat guard at ' + repeat) +
         (supInput && supInput.checked ? ' · supervisor on' : '');
       msg.style.color = 'var(--fg)';
     } catch (e) { msg.textContent = e.status === 403 ? 'Admin access is required to change these settings.' : 'Failed to save'; msg.style.color = 'var(--red)'; }
@@ -48,11 +56,14 @@ export async function initAgentSettings() {
 
   toolsInput.addEventListener('change', save);
   if (roundsInput) roundsInput.addEventListener('change', save);
+  if (repeatInput) repeatInput.addEventListener('change', save);
   if (supInput) supInput.addEventListener('change', save);
   var cur = parseInt(toolsInput.value, 10) || 0;
   var curR = roundsInput ? (parseInt(roundsInput.value, 10) || 20) : null;
+  var curG = repeatInput ? (parseInt(repeatInput.value, 10) || 0) : null;
   msg.textContent = (cur > 0 ? 'Limit: ' + cur + ' tool calls' : 'Unlimited tool calls') +
     (curR != null ? ' · ' + curR + ' steps/message' : '') +
+    (curG != null ? (curG === 0 ? ' · repeat guard off' : ' · repeat guard at ' + curG) : '') +
     (supInput && supInput.checked ? ' · supervisor on' : '');
 
 }

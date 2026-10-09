@@ -6923,7 +6923,9 @@ _AGENT_RULES = """\
 - BIAS TOWARD ACTION on edit requests. If the user says "edit out X", "remove the Y paragraph", "change Z" — JUST DO IT with your best interpretation. Don't ask for clarification on minor ambiguity. The user can undo or re-prompt if wrong.
 - AFTER A TOOL SUCCEEDS, do not second-guess. The success message ("Document edited: v2, 1 edit") means it worked. Reply in ONE short sentence confirming what was done. No re-checking, no replaying the diff in your head, no validation theater.
 - AFTER A TOOL FAILS (timeout, error, "Unknown action", "not found"), DO NOT GO SILENT. The user expects a follow-up: either retry with a fix (e.g. correct args, longer-running form, run `tail -f /tmp/foo.log` to see progress, split into smaller steps), OR explicitly tell them "this didn't work, want me to try X instead?". A failed tool is not a stopping condition — only a successful one is.
-- YOU DECLARE WHEN THE JOB IS DONE — not a timer. Keep taking concrete steps while the task still needs them; you have plenty of rounds, so don't rush to quit just because you've made a few calls. There are exactly three ways to end a turn: (1) DONE — before you declare it, sanity-check that every concrete thing the user asked for actually exists or succeeded (file written, edit applied, command exited clean); then stop calling tools and write the final answer (that IS your "done" signal); (2) BLOCKED — you genuinely can't proceed (a capability is missing, permission denied, or data you can't obtain), so say plainly what's blocking you, in a sentence or two, and stop; (3) keep going with the single most useful next step. The only wrong moves are trailing off mid-task without one of these, and repeating a call you already ran.
+- Repeating a call you already ran is NORMAL work when something changed or you are waiting on a state change: re-run a build after editing the source, tail a log until the line you expect appears, poll a detached job, re-read a file right after writing it. What is wasted is repeating a FAILED call with identical arguments and nothing fixed in between — then either change something concrete (different args, different approach) or declare blocked.
+- WHEN TO STOP USING TOOLS: after you have gathered the information or completed the action the user asked for, WRITE YOUR ANSWER. Do not keep calling tools "to be thorough" or "to double-check" after you already have a clear result. One verification step is fine; three is a loop.
+- YOU DECLARE WHEN THE JOB IS DONE — not a timer. Keep taking concrete steps while the task still needs them; you have plenty of rounds, so don't rush to quit just because you've made a few calls. There are exactly three ways to end a turn: (1) DONE — before you declare it, sanity-check that every concrete thing the user asked for actually exists or succeeded (file written, edit applied, command exited clean); then stop calling tools and write the final answer (that IS your "done" signal); (2) BLOCKED — you genuinely can't proceed (a capability is missing, permission denied, or data you can't obtain), so say plainly what's blocking you, in a sentence or two, and stop; (3) keep going with the single most useful next step. The only wrong moves are trailing off mid-task without one of these, and repeating an identical failed call with nothing changed since.
 - Calendar: call `manage_calendar` with `action=list_calendars` FIRST before create/update/delete operations. If a create/update request is missing a required date, time, or target event, use `ask_user` once with a short question; do not guess a reservation/event date, and do not write a long ambiguity analysis. For open-ended dates, include an option like "Exact date" and ask the user to type it.
 - BULK email actions ("delete all those", "mark all as read", "archive these", "delete all spam", "mark these 19 read") → use the `bulk_email` tool ONCE with either the exact `uids` list from the latest `list_emails` result or `all_unread: true`. NEVER just say you deleted/archived/marked messages unless a delete/archive/mark/bulk email tool call succeeded. NEVER loop mark_email_read / archive_email / delete_email one message at a time — that floods the context and can blow the token budget. One bulk_email call handles the whole set.
 - Suspected spam workflow: first list/search/scan and explain suspicious candidates with UID, sender, subject, and reason. Before deleting, moving to Junk, unsubscribing, or blocking a sender, ask for confirmation with `ask_user` unless the user explicitly commanded the exact action. After approval, use `bulk_email` with action="junk" for messages and `block_sender` for sender rules. Do not block senders silently.
@@ -6977,7 +6979,9 @@ _API_AGENT_RULES = """\
 - BIAS TOWARD ACTION on edit requests. If the user says "edit out X", "remove the Y paragraph", "change Z" — call the edit tool with your best interpretation. Don't ask for clarification on minor ambiguity. The user can undo.
 - AFTER A TOOL SUCCEEDS, do not second-guess. A success response means it worked. Reply in ONE short sentence confirming what was done. No verification thinking, no re-analyzing — move on.
 - AFTER A TOOL FAILS, DO NOT GO SILENT. The user expects a follow-up: retry with a fix, run a diagnostic (`tail`, `ls`, `which`), or explicitly tell them what didn't work and what you'll try next. Failure is not a stopping condition.
-- YOU DECLARE WHEN THE JOB IS DONE — not a timer. Keep taking concrete steps while the task still needs them; don't quit early just because you've made a few calls. Three ways to end a turn: (1) DONE — before declaring it, verify every concrete deliverable the user asked for actually exists or succeeded; then stop calling tools and write the final answer (that IS your "done" signal); (2) BLOCKED — you can't proceed (missing capability, permission denied, unobtainable data), so state plainly what's blocking you and stop; (3) keep going with the single most useful next step. Never trail off mid-task without (1) or (2), and never repeat a call you already ran.
+- Re-running the same call is fine when you changed something or are waiting for a state change (build after an edit, log tail, job poll). Repeating a FAILED call with identical args and nothing fixed is not — fix something concrete or declare blocked.
+- WHEN TO STOP: after gathering what the user asked for, write your answer. Do not keep calling tools "to be thorough" after you have a clear result.
+- YOU DECLARE WHEN THE JOB IS DONE — not a timer. Keep taking concrete steps while the task still needs them; don't quit early just because you've made a few calls. Three ways to end a turn: (1) DONE — before declaring it, verify every concrete deliverable the user asked for actually exists or succeeded; then stop calling tools and write the final answer (that IS your "done" signal); (2) BLOCKED — you can't proceed (missing capability, permission denied, unobtainable data), so state plainly what's blocking you and stop; (3) keep going with the single most useful next step. Never trail off mid-task without (1) or (2), and never repeat an identical failed call with nothing changed since.
 - Calendar: call `manage_calendar` with `action=list_calendars` FIRST before create/update/delete operations. If a create/update request is missing a required date, time, or target event, use `ask_user` once with a short question; do not guess a reservation/event date, and do not write a long ambiguity analysis. For open-ended dates, include an option like "Exact date" and ask the user to type it.
 - "Create/add/write a note" / "notes" / "todos" / "remind me to X at <time>" → use `manage_notes`. Do NOT store notes in `manage_memory`; memory is for persistent facts/preferences about the user, not note content. For reminders, include a `due_date`; for todos, use `note_type=checklist` when appropriate. `manage_tasks` is for RECURRING background AI jobs, NOT for one-off user reminders.
 - "Disable/turn off/enable/turn on <tool>" (shell, search, research, browser, documents, incognito, etc.) → call `ui_control` with `toggle <name> <on|off>`. Aliases accepted: shell→bash, search→web, deepresearch→research, documents→document_editor. NEVER record this as a memory — the user wants the toggle flipped, not a note about preferring it.
@@ -8768,6 +8772,14 @@ _LOCAL_NETWORK_REFERENCE_RE = re.compile(
     re.IGNORECASE,
 )
 _TUI_BRIDGE_TOOL_NAMES = TUI_CLIENT_TOOL_NAMES
+# Loop-breaker (stall detector) opt-out. Set ODYSSEUS_LOOP_BREAKER=0 (or
+# false/off/no) to stop the repeated-tool-call stall detector from forcing a
+# tool-free final round. The hard round budget and artifact-recovery limits
+# still bound the loop, so a runaway turn still ends on max rounds.
+_LOOP_BREAKER_ENABLED = os.getenv(
+    "ODYSSEUS_LOOP_BREAKER", "0"
+).strip().lower() not in {"0", "false", "off", "no"}
+
 _TUI_LOCAL_NETWORK_TOOL_CALL_CAP = 1
 _TUI_LOCAL_INSPECTION_TOOL_CALL_CAP = 4
 _TUI_READ_ONLY_INSPECTION_RE = re.compile(
@@ -16951,6 +16963,24 @@ def build_active_plan_note(approved_plan: str) -> str:
     )
 
 
+# Repeat-guard tunables (local extension layered on the upstream unchanged-
+# results breaker). `repeat_guard_rounds` (Settings > AI, clamped 0..50) sets
+# how many consecutive unchanged-result rounds earn ONE quiet warning before
+# anything escalates; the force-answer fires one _REPEAT_GUARD_HARD_AFTER
+# beyond that. Upstream already resets the count when a result CHANGES, so
+# polling, log-tailing, and re-running after an edit stay free. 0 disables
+# the whole guard (both the warning and the force).
+_REPEAT_GUARD_ROUNDS = 4        # unchanged rounds before the soft warning
+_REPEAT_GUARD_HARD_AFTER = 6    # further unchanged rounds before forcing
+_REPEAT_GUARD_RUNAWAY = 12      # identical-call repeats, last one unchanged, that are plainly stuck
+# "I said I would, then didn't" nudges before giving up on a model that
+# announces an action but never emits the call. Module-level so tests and the
+# loop read one number instead of two. (Upstream pins 2 in
+# test_emits_intent_nudge_exhausted_when_cap_is_exhausted; this fork raises
+# the patience cap to 3 and the test was retargeted to match.)
+_MAX_INTENT_NUDGES = 3
+
+
 def _detect_runaway_call(call_freq, threshold=15):
     """Tool name of a call signature repeated >= ``threshold`` times — a real
     runaway loop. Counts IDENTICAL repeated calls (same tool AND args), so a
@@ -24821,6 +24851,15 @@ async def stream_agent_loop(
     # that instruction, do not re-emit the same stall nudge for every
     # remaining round; route through the bounded exhaustion synthesizer.
     _loop_breaker_force_answer_used = False
+    # Ported repeat guard: settings-tunable warning stage layered ahead of the
+    # upstream unchanged-results force. Read once per run, like other settings
+    # reads in this function.
+    try:
+        from src.settings import load_settings as _load_settings
+        _repeat_guard_rounds = max(0, min(50, int(_load_settings().get("repeat_guard_rounds", _REPEAT_GUARD_ROUNDS))))
+    except Exception:
+        _repeat_guard_rounds = _REPEAT_GUARD_ROUNDS
+    _repeat_guard_warned = False
     _calendar_completion_nudge_sent = False
     _host_bridge_failed_turn = False
     # A detached host-shell result is an unfinished action, not a successful
@@ -24857,7 +24896,6 @@ async def stream_agent_loop(
     # an action without emitting the tool call. Capped to prevent a model
     # that *can't* call the tool from looping forever.
     _intent_nudge_count = 0
-    _MAX_INTENT_NUDGES = 2
     _clarification_nudge_count = 0
     _MAX_CLARIFICATION_NUDGES = 1
     _unattended_final_nudge_sent = False
@@ -31517,10 +31555,13 @@ async def stream_agent_loop(
         # count identical call signatures, not raw per-tool-type totals.
         _runaway = _detect_runaway_call(_call_freq)
         if (
-            _stuck_rounds >= 4
-            or _runaway
-            or _blocked_status_rounds >= 2
-            or _read_only_inspection_rounds >= 6
+            _LOOP_BREAKER_ENABLED
+            and (
+                _stuck_rounds >= 4
+                or _runaway
+                or _blocked_status_rounds >= 2
+                or _read_only_inspection_rounds >= 6
+            )
         ):
             _stall_evidence = EvidenceLedger.from_tool_events(
                 tool_events,
@@ -37107,7 +37148,64 @@ async def stream_agent_loop(
                     "to verify the rest. Do not fetch another page."
                 ),
             })
-        if _unchanged_tool_result_rounds >= 2 and not _force_answer:
+        if (
+            _repeat_guard_rounds
+            and not _repeat_guard_warned
+            and _unchanged_tool_result_rounds >= _repeat_guard_rounds
+            and _unchanged_tool_result_rounds < _repeat_guard_rounds + _REPEAT_GUARD_HARD_AFTER
+            and not _force_answer
+        ):
+            # Soft stage: warn once, tools keep running. A repeat that returns
+            # something DIFFERENT already reset the counter upstream, so this
+            # only ever fires on a genuinely frozen cycle.
+            _repeat_guard_warned = True
+            logger.info(
+                "[agent] unchanged tool results on %d consecutive rounds; warning model",
+                _unchanged_tool_result_rounds,
+            )
+            yield (
+                "data: "
+                + json.dumps({
+                    "type": "loop_breaker_triggered",
+                    "reason": "unchanged_tool_results",
+                    "action": "warning",
+                    "message": (
+                        "The last tool calls kept returning exactly the same "
+                        "results. If nothing has changed since, answer from what "
+                        "is already known or vary the next call — repeating the "
+                        "identical call unchanged a few more times will end "
+                        "tool use for this turn."
+                    ),
+                    "round": round_num,
+                })
+                + "\n\n"
+            )
+            messages.append({
+                "role": "system",
+                "content": (
+                    "That call returned exactly what it returned the previous "
+                    "times. If you are waiting on a state change, vary the call "
+                    "(different arguments, a targeted check) so a change can "
+                    "show up; otherwise answer from the results you already have."
+                ),
+            })
+        if (
+            _repeat_guard_rounds
+            and (
+                _unchanged_tool_result_rounds
+                >= _repeat_guard_rounds + _REPEAT_GUARD_HARD_AFTER
+                # Plainly degenerate even under a lenient knob setting:
+                # one identical call fired RUNAWAY times and its last
+                # repeat came back unchanged (upstream's own 15x runaway
+                # backstop is call-count-only and stays as it was).
+                or (
+                    _unchanged_tool_result_rounds >= 1
+                    and (max(_call_freq.values(), default=0)
+                         >= _REPEAT_GUARD_RUNAWAY)
+                )
+            )
+            and not _force_answer
+        ):
             _loop_evidence = EvidenceLedger.from_tool_events(
                 tool_events,
                 _completion_requirements,
@@ -37156,6 +37254,7 @@ async def stream_agent_loop(
                     + json.dumps({
                         "type": "loop_breaker_triggered",
                         "reason": "unchanged_tool_results",
+                        "action": "force_answer",
                         "message": (
                             "The agent received the same tool result repeatedly, "
                             "so it is being asked to finish instead of probing again."

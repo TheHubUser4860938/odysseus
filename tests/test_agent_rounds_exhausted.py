@@ -39,6 +39,11 @@ def _patch_common(monkeypatch):
     # Skip RAG/tool-index, MCP, and settings lookups; keep the real loop body,
     # _resolve_tool_blocks, and parse_tool_blocks.
     monkeypatch.setattr(al, "get_setting", lambda key, default=None: default, raising=False)
+    # The stall detector now defaults to OFF for single-user installs
+    # (ODYSSEUS_LOOP_BREAKER defaults to "0"), but these fixtures assert on the
+    # guard firing, so pin it ON here to keep the tested contract independent of
+    # the shipped default.
+    monkeypatch.setattr(al, "_LOOP_BREAKER_ENABLED", True, raising=False)
     monkeypatch.setattr(al, "get_mcp_manager", lambda: None, raising=False)
     monkeypatch.setattr(al, "estimate_tokens", lambda *a, **k: 10, raising=False)
     # The round providers are synthetic. Keep real compaction logic while
@@ -690,7 +695,9 @@ def test_emits_intent_nudge_exhausted_when_cap_is_exhausted(monkeypatch):
     guard = next((e for e in events if e.get("type") == "intent_nudge_exhausted"), None)
     assert guard is not None, events
     assert guard["reason"] == "intent_without_action_nudge_cap"
-    assert guard["nudges"] == 2
+    # LOCAL FORK: _MAX_INTENT_NUDGES raised 2 -> 3 (module constant) for more
+    # patience with promise-then-stall models; upstream pins 2 here.
+    assert guard["nudges"] == 3
 
 
 def test_try_different_search_gets_intent_followthrough_nudges(monkeypatch):
@@ -1880,6 +1887,16 @@ def test_tui_local_skill_request_reconciles_normal_tool_policy(monkeypatch):
 
 def test_eval_identical_tool_evidence_converges_before_round_cap(monkeypatch):
     _patch_common(monkeypatch)
+    # LOCAL FORK: the repeat guard is settings-tunable and deliberately more
+    # lenient than upstream's force-at-two-rounds (default: warn at 4 unchanged
+    # results, force 6 later — generous on purpose so polling/log-tailing isn't
+    # cut short). Pin the upstream trigger here (2 unchanged results; HARD_AFTER=0
+    # forces at the same point and leaves the soft-warning window empty, so the
+    # event stream is exactly upstream's) so this keeps guarding the ORIGINAL
+    # contract independently of how the local knob is tuned.
+    monkeypatch.setattr("src.settings.load_settings", dict)
+    monkeypatch.setattr(al, "_REPEAT_GUARD_ROUNDS", 2)
+    monkeypatch.setattr(al, "_REPEAT_GUARD_HARD_AFTER", 0)
     rounds = []
 
     async def _fake_exec(block, *args, **kwargs):
@@ -1928,6 +1945,11 @@ def test_eval_identical_tool_evidence_converges_before_round_cap(monkeypatch):
 
 def test_identical_inspections_redirect_to_missing_artifact_before_convergence(monkeypatch):
     _patch_common(monkeypatch)
+    # LOCAL FORK pin (see test_eval_identical_tool_evidence_converges...):
+    # restore upstream's 2-round trigger; the local default (4+6) is more lenient.
+    monkeypatch.setattr("src.settings.load_settings", dict)
+    monkeypatch.setattr(al, "_REPEAT_GUARD_ROUNDS", 2)
+    monkeypatch.setattr(al, "_REPEAT_GUARD_HARD_AFTER", 0)
     rounds = []
     writes = []
 
@@ -2155,6 +2177,11 @@ def test_identical_failed_inspections_do_not_trigger_unchanged_evidence_recovery
 
 def test_post_redirect_varied_inspection_is_suppressed_until_artifact_mutation(monkeypatch):
     _patch_common(monkeypatch)
+    # LOCAL FORK pin (see test_eval_identical_tool_evidence_converges...):
+    # restore upstream's 2-round trigger; the local default (4+6) is more lenient.
+    monkeypatch.setattr("src.settings.load_settings", dict)
+    monkeypatch.setattr(al, "_REPEAT_GUARD_ROUNDS", 2)
+    monkeypatch.setattr(al, "_REPEAT_GUARD_HARD_AFTER", 0)
     requests = []
     executed = []
 

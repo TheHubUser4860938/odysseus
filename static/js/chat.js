@@ -5123,9 +5123,23 @@ import { invalidateSettings } from './appConfig.js';
                 _cancelThinkingTimer();
                 _removeThinkingSpinner();
                 const guardDiv = document.createElement('div');
+                // The repeat guard warns before it ever stops anything
+                // (action: 'warning'), and the calls kept running. Rendering
+                // that note as the same bold "stopped" pill as a forced
+                // wrap-up made ordinary, legitimate retries look like the
+                // agent had been killed mid-task, so the soft stage gets a
+                // quiet italic footnote instead of bracketed guard text.
+                const _isSoftRepeatNote = json.type === 'loop_breaker_triggered' && json.action === 'warning';
                 guardDiv.className = 'stopped-indicator';
+                if (_isSoftRepeatNote) {
+                  guardDiv.style.cssText = 'font-size:11px;opacity:0.6;font-style:italic;padding:4px 8px;margin:4px 0;';
+                }
                 const guardLabel = document.createElement('span');
-                guardLabel.textContent = `[Agent guard: ${json.message || json.reason || 'internal stop'}]`;
+                // Soft stage: plain quiet sentence. Hard stage: bracketed, so
+                // it still reads as a real stop when one actually happens.
+                guardLabel.textContent = _isSoftRepeatNote
+                  ? (json.message || json.reason || 'repeat noticed')
+                  : `[Agent guard: ${json.message || json.reason || 'internal stop'}]`;
                 guardDiv.appendChild(guardLabel);
                 const targetBody = roundHolder && roundHolder.querySelector('.body');
                 if (targetBody) targetBody.appendChild(guardDiv);

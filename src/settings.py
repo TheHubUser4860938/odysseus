@@ -114,6 +114,15 @@ DEFAULT_SETTINGS = {
     "research_run_timeout_seconds": 1800,
     "agent_max_tool_calls": 0,
     "agent_max_rounds": 20,  # per-message agent step cap (clamped 1..200)
+    # Repeat-guard sensitivity: how many times the SAME exact tool call may be
+    # re-issued and come back with an IDENTICAL result before the loop tells the
+    # model the repeat is pointless. A repeat that returns something DIFFERENT
+    # (a log line appeared, the job finished, the build error moved) resets the
+    # count, so polling and deliberate re-running never trip it. Six further
+    # unchanged repeats, or 12 unchanged repeats outright, then force one
+    # tool-free final-answer round. Deliberately generous — cutting real work
+    # short is worse than the tokens a stuck cycle burns. 0 disables it.
+    "repeat_guard_rounds": 4,  # clamped 0..50
     # Soft input-token budget for the agent loop. The DEFAULT value (6000) is the
     # "auto" sentinel: it means "scale the budget to the model's context window"
     # (#1230) — so long-context models aren't capped at 6000. Set ANY OTHER value
