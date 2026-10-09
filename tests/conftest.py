@@ -91,6 +91,19 @@ def _shard_spec(config):
         raise pytest.UsageError(str(error)) from error
 
 
+@pytest.fixture(autouse=True)
+def _clear_fastembed_client_cache():
+    """The local ONNX embedding client is a process-wide singleton in prod; in
+    tests that means a double cached by one test leaks into the next. Drop it
+    (plus the HTTP singleton) around every test."""
+    yield
+    try:
+        from src.embeddings import reset_http_embed_state
+        reset_http_embed_state()
+    except Exception:
+        pass
+
+
 def pytest_configure(config):
     """Register the dynamic taxonomy ``sub_*`` markers before collection.
 
