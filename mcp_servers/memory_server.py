@@ -11,15 +11,17 @@ import sys
 import time
 from pathlib import Path
 
-from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# After the sys.path bootstrap above: the shim is a `src.` module, and stdio
+# servers start with the mcp package already importable but the repo root not
+# yet on sys.path.
+from src.mcp_server_compat import make_server
 from src.memory import MemoryStoreUnreadable
 
-server = Server("memory")
 
 # Late-initialized managers (set during first tool call)
 _memory_manager = None
@@ -112,7 +114,6 @@ def _ensure_init():
         _memory_vector = None
 
 
-@server.list_tools()
 async def list_tools() -> list[Tool]:
     return [
         Tool(
@@ -140,7 +141,6 @@ async def list_tools() -> list[Tool]:
     ]
 
 
-@server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name != "manage_memory":
         return _text_result(f"Unknown tool: {name}")
@@ -275,6 +275,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     else:
         return _text_result(f"Error: Unknown action '{action}'. Use: list, add, edit, delete, search")
 
+
+
+# Registered here (not at import) because list_tools/call_tool are
+# defined below in this module. Make_server wires whichever registration API the
+# installed mcp SDK supports; see src/mcp_server_compat.py.
+server = make_server("memory", list_tools, call_tool)
 
 async def run():
     async with stdio_server() as (read_stream, write_stream):

@@ -27,13 +27,15 @@ import uuid
 from contextvars import ContextVar
 from urllib.parse import parse_qs, unquote, urlparse
 
-from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-server = Server("email")
+# After the sys.path bootstrap above: the shim is a `src.` module (see the
+# memory server's comment).
+from src.mcp_server_compat import make_server
+
 EMAIL_SOCKET_TIMEOUT = float(os.environ.get("EMAIL_SOCKET_TIMEOUT", "20"))
 from src.constants import DATA_DIR as _DATA_DIR, APP_DB, EMAIL_CACHE_DB, SETTINGS_FILE as _SETTINGS_FILE, MAIL_ATTACHMENTS_DIR
 try:
@@ -3573,7 +3575,6 @@ def _download_attachment(uid, index, folder="INBOX", account=None):
 # ── MCP Tool Registration ──
 
 
-@server.list_tools()
 async def list_tools() -> list[Tool]:
     # The user may have multiple IMAP accounts configured. Every tool accepts an
     # optional `account` param — match by name (e.g. "work"), email address,
@@ -4025,7 +4026,6 @@ async def list_tools() -> list[Tool]:
     ]
 
 
-@server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     arguments = dict(arguments) if isinstance(arguments, dict) else {}
     owner = str(arguments.pop(_MCP_OWNER_ARG, "") or "").strip()
@@ -4688,6 +4688,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
 
 # ── Main ──
+
+
+# Registered here (not at import) because list_tools/call_tool are
+# defined below in this module. Make_server wires whichever registration API the
+# installed mcp SDK supports; see src/mcp_server_compat.py.
+server = make_server("email", list_tools, call_tool)
 
 async def run():
     async with stdio_server() as (read_stream, write_stream):

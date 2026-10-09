@@ -9,13 +9,14 @@ import os
 import sys
 from pathlib import Path
 
-from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-server = Server("rag")
+# After the sys.path bootstrap above: the shim is a `src.` module (see the
+# memory server's comment).
+from src.mcp_server_compat import make_server
 
 _rag_manager = None
 _personal_docs_manager = None
@@ -43,7 +44,6 @@ def _ensure_init():
         pass
 
 
-@server.list_tools()
 async def list_tools() -> list[Tool]:
     return [
         Tool(
@@ -65,7 +65,6 @@ async def list_tools() -> list[Tool]:
     ]
 
 
-@server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name != "manage_rag":
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
@@ -150,6 +149,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     else:
         return [TextContent(type="text", text=f"Error: Unknown action '{action}'. Use: list, add_directory, remove_directory")]
 
+
+
+# Registered here (not at import) because list_tools/call_tool are
+# defined below in this module. Make_server wires whichever registration API the
+# installed mcp SDK supports; see src/mcp_server_compat.py.
+server = make_server("rag", list_tools, call_tool)
 
 async def run():
     async with stdio_server() as (read_stream, write_stream):

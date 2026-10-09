@@ -10,18 +10,18 @@ import sys
 import uuid
 from pathlib import Path
 
-from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# After the sys.path bootstrap above: the shim is a `src.` module (see the
+# memory server's comment).
+from src.mcp_server_compat import make_server
 from src.constants import GENERATED_IMAGES_DIR
 
-server = Server("image_gen")
 
 
-@server.list_tools()
 async def list_tools() -> list[Tool]:
     return [
         Tool(
@@ -41,7 +41,6 @@ async def list_tools() -> list[Tool]:
     ]
 
 
-@server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name != "generate_image":
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
@@ -174,6 +173,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     except Exception as e:
         return [TextContent(type="text", text=f"Error: {e}")]
 
+
+
+# Registered here (not at import) because list_tools/call_tool are
+# defined below in this module. Make_server wires whichever registration API the
+# installed mcp SDK supports; see src/mcp_server_compat.py.
+server = make_server("image_gen", list_tools, call_tool)
 
 async def run():
     async with stdio_server() as (read_stream, write_stream):

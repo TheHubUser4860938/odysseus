@@ -81,7 +81,7 @@ _BUILTIN_NPX_SERVERS = {
     "builtin_browser": {
         "name": "Built-in: Browser",
         "command": "npx",
-        "args": ["-y", "@playwright/mcp@latest", "--headless", "--caps", "vision"],
+        "args": ["-y", "@playwright/mcp@latest", "--headless", "--caps", "vision", "--browser", "chromium"],
     }
 }
 
@@ -114,15 +114,15 @@ def _find_browser_executable() -> str:
     configured = os.environ.get("ODYSSEUS_BROWSER_EXECUTABLE", "").strip()
     if configured:
         return configured
-    for name in ("google-chrome", "chromium", "chromium-browser"):
+    for name in ("chromium", "chromium-browser", "google-chrome"):
         path = shutil.which(name)
         if path:
             return path
     for candidate in (
-        "/opt/google/chrome/chrome",
-        "/usr/bin/google-chrome",
         "/usr/bin/chromium",
         "/usr/bin/chromium-browser",
+        "/opt/google/chrome/chrome",
+        "/usr/bin/google-chrome",
     ):
         if os.path.isfile(candidate):
             return candidate
