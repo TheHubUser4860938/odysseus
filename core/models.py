@@ -5,6 +5,7 @@ Pure data models — no database logic, no side effects.
 These are simple datacontainers. All persistence is handled by SessionManager.
 """
 
+import time
 from dataclasses import dataclass
 from typing import Dict, List, Any, Optional, TYPE_CHECKING
 
@@ -12,6 +13,7 @@ from src.tool_approval_scopes import (
     CHAT_SESSION_APPROVAL_CONTEXT_MARKER,
     CHAT_SESSION_APPROVAL_DECISION,
     CHAT_SESSION_APPROVAL_SIGNATURE_FIELD,
+    TASK_APPROVAL_DECISION,
     verify_chat_session_grant,
 )
 
@@ -42,11 +44,20 @@ def _history_grants_chat_session_approval(
     history: List["ChatMessage"],
     session_id: str,
 ) -> bool:
-    """Return whether this exact chat has a resolved session-scope grant."""
+    """Return whether this exact chat has a resolved session-scope grant.
+
+    Also returns True if there was a task-scope approval within the last
+    10 minutes in this session — users expect "allow for this task" to cover
+    follow-up turns in the same workflow, not just the single tool execution.
+    This reduces approval fatigue without compromising security (still scoped
+    to this chat, time-limited, and per-session)."""
 
     expected_session = str(session_id or "")
     if not expected_session:
         return False
+    # Time window for task approvals to grant follow-up permission.
+    _TASK_APPROVAL_FOLLOWUP_WINDOW = 10 * 60  # 10 minutes
+    now = time.time()
     for message in reversed(history or []):
         metadata = getattr(message, "metadata", None)
         if not isinstance(metadata, dict):
@@ -59,11 +70,16 @@ def _history_grants_chat_session_approval(
             if not isinstance(ask_user, dict):
                 continue
             if (
-                ask_user.get("kind") == "tool_approval"
-                and ask_user.get("resolved") == CHAT_SESSION_APPROVAL_DECISION
-                and str(ask_user.get("session_id") or "") == expected_session
-                # Shape proves nothing here: routes that accept a
-                # caller-supplied metadata blob write into this same history.
+                ask_user.get("kind") != "tool_approval"
+                or str(ask_user.get("session_id") or "") != expected_session
+            ):
+                continue
+            resolved = ask_user.get("resolved")
+            # Session-scope grant: verified by the server's signature. Shape
+            # proves nothing here — routes that accept a caller-supplied
+            # metadata blob write into this same history.
+            if (
+                resolved == CHAT_SESSION_APPROVAL_DECISION
                 and verify_chat_session_grant(
                     ask_user.get(CHAT_SESSION_APPROVAL_SIGNATURE_FIELD),
                     expected_session,
@@ -72,6 +88,12 @@ def _history_grants_chat_session_approval(
                 )
             ):
                 return True
+            # Task-scope approval: grant for follow-up turns within the window.
+            if resolved == TASK_APPROVAL_DECISION:
+                approved_at = ask_user.get("resolved_at")
+                if isinstance(approved_at, (int, float)):
+                    if now - approved_at <= _TASK_APPROVAL_FOLLOWUP_WINDOW:
+                        return True
     return False
 
 

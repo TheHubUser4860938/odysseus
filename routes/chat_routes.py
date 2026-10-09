@@ -1336,6 +1336,7 @@ def _mark_tool_approval_resolved(sess, approval_id: Any, decision: Any) -> bool:
                 getattr(sess, "id", ""),
                 normalized_decision,
             )
+            ask_user["resolved_at"] = time.time()
             message_id = metadata.get("_db_id")
             resolved_metadata = {
                 key: value for key, value in metadata.items() if key != "_db_id"
