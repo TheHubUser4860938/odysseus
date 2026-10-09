@@ -488,9 +488,17 @@ VARIABLE_NOTES: dict[str, tuple[str, str, str]] = {
     # -- Agent loop and tool execution -------------------------------------
     "ODYSSEUS_TOOL_APPROVAL_GATE": (
         "Agent loop and tool execution", USER,
-        "Security-relevant. On by default: after external content enters a run, "
-        "tools that execute code, mutate state or cause external side effects need "
-        "a separate approval. Set to 0 to opt out.",
+        "Security-relevant. Off by default on single-user local installs: set to 1 "
+        "to require a separate approval, after external content enters a run, for "
+        "tools that execute code, mutate state or cause external side effects.",
+    ),
+    "ODYSSEUS_LOOP_BREAKER": (
+        "Agent loop and tool execution", USER,
+        "Repeated-tool-call stall detector. Off by default in this build: the "
+        "settings-tunable repeat guard (Settings > AI) warns first and forces a "
+        "wrap-up only well after unchanged results persist. Set to 1 to restore "
+        "the detector that forces a tool-free final round on a stalled loop; the "
+        "hard round budget always bounds runaway turns.",
     ),
     "ODYSSEUS_MCP_ALLOWED_COMMANDS": (
         "Agent loop and tool execution", USER,
