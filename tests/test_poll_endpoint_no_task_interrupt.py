@@ -19,7 +19,10 @@ def test_tasks_runs_recent_is_passive():
     )
 
 
-def test_tasks_runs_recent_does_not_affect_other_task_paths():
+def test_tasks_runs_recent_does_not_affect_other_task_paths(monkeypatch):
+    # LOCAL FORK: the foreground gate now defaults off for single-user local
+    # installs (upstream default was on); pin the gate-enabled premise.
+    monkeypatch.setenv("BACKGROUND_TASK_FOREGROUND_GATE", "true")
     ig = _reload_gate()
 
     # A neighboring mutating path must remain interactive.
@@ -48,8 +51,10 @@ def test_heartbeat_does_not_stop_background_tasks_when_gate_disabled(monkeypatch
 
 
 def test_heartbeat_stops_background_tasks_when_gate_enabled(monkeypatch):
+    # LOCAL FORK: gate-enabled premise pinned explicitly (upstream defaulted
+    # the gate on; this build defaults it off for single-user installs).
+    monkeypatch.setenv("BACKGROUND_TASK_FOREGROUND_GATE", "true")
     ig = _reload_gate()
-    monkeypatch.delenv("BACKGROUND_TASK_FOREGROUND_GATE", raising=False)
 
     stop_calls = []
 
