@@ -6,9 +6,11 @@ a launch scope) the pending must record the real reason, and replay must report
 THAT reason instead of the generic "no sealed process/job identity".
 """
 import asyncio
+import tempfile
 from collections import namedtuple
 
 from src.agent_runtime.authority import OperationGrant, RequestAuthority
+from src.agent_runtime.resources import FilesystemRoot
 from src.tool_approvals import ToolApprovalStore
 from src.tool_capabilities import capabilities_for_action
 from src.tool_execution import NO_TOOL_SECURITY_CONTEXT, execute_tool_block
@@ -17,10 +19,17 @@ ToolBlock = namedtuple("ToolBlock", ["tool_type", "content"])
 
 
 def _pending_without_launch_scope(store):
-    # A bash grant but NO launch scope: resolve_process_operation cannot seal a
+    # A bash grant and NO launch scope: resolve_process_operation cannot seal a
     # process operation, which is exactly the swallowed failure under test.
+    # Two filesystem roots, not one: upstream #6635 seals a launch scope for an
+    # ungranted launch when the authority has exactly one root, so a
+    # single-root authority now binds successfully and records no denial.
+    roots = tuple(FilesystemRoot.seal(path, owner="alice")
+                  for path in (tempfile.mkdtemp(prefix="odysseus-root-a-"),
+                               tempfile.mkdtemp(prefix="odysseus-root-b-")))
     authority = RequestAuthority("req-1", "alice", "session-1", "",
-                                 (OperationGrant("bash"),), launch_scopes=())
+                                 (OperationGrant("bash"),), launch_scopes=(),
+                                 resource_roots=roots)
     return store.create(
         owner="Alice", session_id="session-1", origin_run_id="run-1",
         tool_name="bash", content="printf exact", workspace=None,

@@ -49,6 +49,17 @@ from src.tool_capabilities import (
 )
 from src.tool_types import ToolBlock
 
+@pytest.fixture(autouse=True)
+def _gate_enabled(monkeypatch):
+    # LOCAL FORK: this build defaults the tool approval gate off for
+    # single-user local installs (upstream default is on), and the switch is a
+    # module constant read at import. Every test here asserts a refusal the
+    # gate produces, so pin the gate-enabled premise on the module the
+    # decisions are computed in.
+    from src import tool_capabilities as _tc
+    monkeypatch.setattr(_tc, "TOOL_APPROVAL_GATE_ENABLED", True)
+
+
 READ_TOOL = "mcp__a1b2c3d4__search_notes"
 READ_TOOL_TWO = "mcp__a1b2c3d4__read_note"
 WRITE_TOOL = "mcp__a1b2c3d4__create_note"
