@@ -28,9 +28,11 @@ if os.name == "nt":
 
 import logging
 import threading
+from collections import OrderedDict
+
 import numpy as np
 import httpx
-from typing import Dict, List, Optional
+from typing import List, Optional, Tuple
 
 from src.runtime_paths import get_app_root
 
@@ -184,16 +186,11 @@ class FastEmbedClient:
         # a thread pool from the whole machine for every process, which can
         # create hundreds of threads per worker and starve inference.  Keep
         # the existing default for normal installs, but allow operators to
-        # bound that pool explicitly.
-        raw_threads = os.getenv("FASTEMBED_THREADS", "").strip()
-        if raw_threads:
-            try:
-                threads = int(raw_threads)
-            except ValueError as exc:
-                raise ValueError("FASTEMBED_THREADS must be an integer") from exc
-            if not 1 <= threads <= 256:
-                raise ValueError("FASTEMBED_THREADS must be between 1 and 256")
-            kwargs["threads"] = threads
+        # bound that pool explicitly.  The pool is fixed when the session is
+        # built, so get_fastembed_client() keys its cache on it.
+        self.threads = _fastembed_threads()
+        if self.threads is not None:
+            kwargs["threads"] = self.threads
         self._embedding = TextEmbedding(**kwargs)
         self._dim: Optional[int] = None
         self.url = "local://fastembed"
@@ -247,55 +244,148 @@ _embed_client_cache = None  # singleton cache: only load the model once
 # single bge-large-en-v1.5 session costs ~1.2GB of *private* RSS. Every consumer
 # used to build its own FastEmbedClient, and with the RAG, semantic-memory and
 # tool-index lanes each holding one the process settled at 3-4x the model size
-# (~4.4GB resident). One client per model name is cached here and shared.
-_fastembed_client_cache: Dict[str, "FastEmbedClient"] = {}
+# (~4.4GB resident). One client per (model, threads) is cached here and shared.
+# Reported by #6510; the resident count is exposed by fastembed_resident_info().
+_fastembed_client_cache: "OrderedDict[Tuple[str, Optional[int]], FastEmbedClient]" = OrderedDict()
 _fastembed_cache_lock = threading.Lock()
 
 
+def _fastembed_threads() -> Optional[int]:
+    """The ONNX thread pool the operator asked for via FASTEMBED_THREADS, or None
+    for fastembed's own machine-sized default.
+
+    This is part of the client cache key, not just a build detail: the pool is
+    sized when the session is created, so a client cached under threads=4 must
+    not be handed to a process reconfigured to threads=16.
+    """
+    raw = os.getenv("FASTEMBED_THREADS", "").strip()
+    if not raw:
+        return None
+    try:
+        threads = int(raw)
+    except ValueError as exc:
+        raise ValueError("FASTEMBED_THREADS must be an integer") from exc
+    if not 1 <= threads <= 256:
+        raise ValueError("FASTEMBED_THREADS must be between 1 and 256")
+    return threads
+
+
+def _fastembed_cache_limit() -> int:
+    """How many distinct (model, threads) clients stay resident (1..8, default 1).
+
+    One by default because each resident model is its own ~1.2GB private heap copy:
+    a model swap should replace the weights, not stack a second copy behind the
+    first. A fleet that flips between two models sets 2 to keep both warm.
+    """
+    raw = os.getenv("FASTEMBED_CLIENT_CACHE_SIZE", "").strip()
+    if not raw:
+        return 1
+    try:
+        limit = int(raw)
+    except ValueError as exc:
+        raise ValueError("FASTEMBED_CLIENT_CACHE_SIZE must be an integer") from exc
+    if not 1 <= limit <= 8:
+        raise ValueError("FASTEMBED_CLIENT_CACHE_SIZE must be between 1 and 8")
+    return limit
+
+
+def fastembed_client_cache_size() -> int:
+    """Local embedding models resident in this process (alias keys collapsed)."""
+    return len({id(client) for client in _fastembed_client_cache.values()})
+
+
+def fastembed_resident_info() -> dict:
+    """What this process is carrying, for the admin Embedding panel.
+
+    The 3-4x duplication in #6510 was only visible by grepping app.log for
+    "FastEmbed loaded model"; this is the gauge that makes it a number on screen.
+    """
+    with _fastembed_cache_lock:
+        newest = next(reversed(list(_fastembed_client_cache.values())), None)
+        return {
+            "clients": fastembed_client_cache_size(),
+            "model": getattr(newest, "model", None),
+            "threads": getattr(newest, "threads", None),
+            "cache_size": _fastembed_cache_limit(),
+        }
+
+
+def _evict_to_cache_limit(limit: int) -> int:
+    """Drop the least recently used clients, with every alias key pointing at
+    them, until `limit` remain. The caller's brand-new client is the newest
+    entry, so it is never the one evicted. Caller holds the lock.
+    Returns the number of clients resident afterwards."""
+    while fastembed_client_cache_size() > limit and _fastembed_client_cache:
+        _, oldest = next(iter(_fastembed_client_cache.items()))
+        for alias in [k for k, v in _fastembed_client_cache.items() if v is oldest]:
+            _fastembed_client_cache.pop(alias, None)
+    return fastembed_client_cache_size()
+
+
 def get_fastembed_client(model: Optional[str] = None) -> "FastEmbedClient":
-    """Factory: return a process-wide local FastEmbed client, loading the ONNX
-    weights at most once per model name. get_embedding_client() and every
-    embedding lane (RAG / semantic memory / tool index) share this one copy.
+    """Factory: return the process-wide local FastEmbed client for this
+    (model, threads) pair, loading the ONNX weights at most once per pair.
+    get_embedding_client() and every embedding lane (RAG / semantic memory /
+    tool index) share that one copy.
+
+    Keeps FASTEMBED_CLIENT_CACHE_SIZE clients resident (1 by default), so a model
+    swap replaces the resident weights instead of stacking another ~1.2GB behind
+    them; the least recently used client is the one that goes.
 
     Raises what FastEmbedClient() raises (missing fastembed, bad model, unreadable
-    cache dir); the failed load is not cached, so a later call can retry.
+    cache dir, a bad FASTEMBED_THREADS); the failed load is not cached, so a later
+    call can retry.
     """
-    key = (model or os.getenv("FASTEMBED_MODEL", "") or "").strip() or _DEFAULT_FASTEMBED_MODEL
+    threads = _fastembed_threads()  # validate outside the lock: a bad setting is the caller's problem
+    key = ((model or os.getenv("FASTEMBED_MODEL", "") or "").strip() or _DEFAULT_FASTEMBED_MODEL, threads)
 
     cached = _fastembed_client_cache.get(key)
     if cached is not None:
+        with _fastembed_cache_lock:
+            try:
+                _fastembed_client_cache.move_to_end(key, last=True)  # LRU touch
+            except KeyError:
+                pass  # evicted by another lane's load while we took the lock
         return cached
 
     with _fastembed_cache_lock:
         cached = _fastembed_client_cache.get(key)
         if cached is not None:
+            _fastembed_client_cache.move_to_end(key, last=True)
             return cached
         # Only pass the model through when a caller asked for a specific one, so
         # the default path keeps resolving FASTEMBED_MODEL inside FastEmbedClient.
         client = FastEmbedClient(model) if model else FastEmbedClient()
         client.get_sentence_embedding_dimension()  # health check
-        resolved = getattr(client, "model", None) or key
+        resolved = (getattr(client, "model", None) or key[0], threads)
         _fastembed_client_cache[resolved] = client
         if resolved != key:
+            # Alias: the no-argument path resolves the model inside the client, so
+            # the requested key must find this client too, or the next boot call
+            # loads a second copy of the same weights.
             _fastembed_client_cache[key] = client
+        resident = _evict_to_cache_limit(_fastembed_cache_limit())
         logger.info(
-            "FastEmbed client ready: model=%s (models resident in this process=%d)",
-            resolved,
-            len({id(c) for c in _fastembed_client_cache.values()}),
+            "FastEmbed client ready: model=%s threads=%s (clients resident in this process=%d)",
+            resolved[0],
+            "default" if threads is None else threads,
+            resident,
         )
         return client
 
 
 def reset_fastembed_client_cache() -> int:
     """Drop cached local FastEmbed clients so the next get_fastembed_client()
-    reloads — needed when FASTEMBED_MODEL changes or when a working HTTP endpoint
-    takes over and the local ONNX weights should be released.
+    reloads — needed when FASTEMBED_MODEL, FASTEMBED_THREADS, or the embedding
+    endpoint change, and it needs no restart.
 
-    Live EmbeddingLane objects hold their own references to the old client, so
+    This alone does NOT free the ~1.2GB per model. fastembed's TextEmbedding has
+    no close()/dispose(), so the ONNX session goes only when the last reference
+    to it does — and live EmbeddingLane objects hold one. A real model swap must
     pair this with reset_embedding_lane_state() / reset_tool_index() /
-    src.rag_singleton to actually free the heap. Returns clients dropped."""
+    src.rag_singleton. Returns clients dropped."""
     with _fastembed_cache_lock:
-        dropped = len({id(c) for c in _fastembed_client_cache.values()})
+        dropped = fastembed_client_cache_size()
         _fastembed_client_cache.clear()
     return dropped
 

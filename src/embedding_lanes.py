@@ -118,8 +118,10 @@ def _build_fastembed_client():
         return get_fastembed_client()
     except ImportError:
         raise
-    # If a caller (test double) replaces FastEmbedClient with something that is
-    # not the real ONNX loader, fall back to constructing it directly.
+    # Test seam only: a caller that swaps in a FastEmbedClient double whose
+    # signature the real factory cannot take gets a direct construction here, so
+    # this branch bypasses the process-wide cache by design. Production lanes go
+    # through get_fastembed_client() and share one weight copy (#6510).
     except TypeError:
         client = FastEmbedClient()
         client.get_sentence_embedding_dimension()

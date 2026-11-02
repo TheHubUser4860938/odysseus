@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from src.embedding_lanes import (
@@ -372,3 +374,129 @@ def test_reset_reloads_fastembed_after_model_switch(monkeypatch):
         "BAAI/bge-large-en-v1.5",
     ]
     embeddings.reset_fastembed_client_cache()
+
+
+def test_thread_setting_replaces_the_cached_client(monkeypatch):
+    """FASTEMBED_THREADS sizes the ONNX thread pool when the client is built, so a
+    client cached under one setting must not be served to a process reconfigured
+    to another."""
+    import src.embeddings as embeddings
+
+    built = []
+
+    class ThreadsAwareFastEmbed:
+        def __init__(self, model=None):
+            raw = os.environ.get("FASTEMBED_THREADS", "").strip()
+            self.threads = int(raw) if raw else None
+            built.append(self.threads)
+            self.model = model or embeddings._DEFAULT_FASTEMBED_MODEL
+            self.url = "local://fastembed"
+
+        def get_sentence_embedding_dimension(self):
+            return 384
+
+    monkeypatch.setattr(embeddings, "FastEmbedClient", ThreadsAwareFastEmbed)
+    monkeypatch.delenv("FASTEMBED_CLIENT_CACHE_SIZE", raising=False)
+
+    monkeypatch.setenv("FASTEMBED_THREADS", "4")
+    four = embeddings.get_fastembed_client()
+    monkeypatch.setenv("FASTEMBED_THREADS", "16")
+    sixteen = embeddings.get_fastembed_client()
+
+    assert sixteen is not four, "a threads change reused the client's old thread pool"
+    assert built == [4, 16]
+    assert embeddings.get_fastembed_client() is sixteen  # cached per setting
+
+
+def test_cache_keeps_only_the_newest_client_by_default(monkeypatch):
+    """Every resident model is ~1.2GB of private heap, so a model swap must not
+    stack: by default the cache holds the newest client only."""
+    import src.embeddings as embeddings
+
+    loaded = []
+
+    class TwoModelFastEmbed:
+        def __init__(self, model=None):
+            self.model = model or embeddings._DEFAULT_FASTEMBED_MODEL
+            self.url = "local://fastembed"
+            loaded.append(self.model)
+
+        def get_sentence_embedding_dimension(self):
+            return 384 if "MiniLM" in self.model else 1024
+
+    monkeypatch.setattr(embeddings, "FastEmbedClient", TwoModelFastEmbed)
+    monkeypatch.delenv("FASTEMBED_CLIENT_CACHE_SIZE", raising=False)
+
+    small = embeddings.get_fastembed_client("sentence-transformers/all-MiniLM-L6-v2")
+    large = embeddings.get_fastembed_client("BAAI/bge-large-en-v1.5")
+
+    assert small is not large
+    assert embeddings.fastembed_client_cache_size() == 1, "the previous model stayed resident"
+    assert embeddings.get_fastembed_client("BAAI/bge-large-en-v1.5") is large
+    assert loaded == ["sentence-transformers/all-MiniLM-L6-v2", "BAAI/bge-large-en-v1.5"]
+
+
+def test_cache_size_setting_keeps_two_models_resident(monkeypatch):
+    """FASTEMBED_CLIENT_CACHE_SIZE=2 is the escape hatch for a setup that flips
+    between two models and wants both weight copies kept."""
+    import src.embeddings as embeddings
+
+    loaded = []
+
+    class TwoModelFastEmbed:
+        def __init__(self, model=None):
+            self.model = model or embeddings._DEFAULT_FASTEMBED_MODEL
+            self.url = "local://fastembed"
+            loaded.append(self.model)
+
+        def get_sentence_embedding_dimension(self):
+            return 384 if "MiniLM" in self.model else 1024
+
+    monkeypatch.setattr(embeddings, "FastEmbedClient", TwoModelFastEmbed)
+    monkeypatch.setenv("FASTEMBED_CLIENT_CACHE_SIZE", "2")
+
+    small = embeddings.get_fastembed_client("sentence-transformers/all-MiniLM-L6-v2")
+    large = embeddings.get_fastembed_client("BAAI/bge-large-en-v1.5")
+
+    assert embeddings.fastembed_client_cache_size() == 2
+    assert embeddings.get_fastembed_client("sentence-transformers/all-MiniLM-L6-v2") is small
+    assert embeddings.get_fastembed_client("BAAI/bge-large-en-v1.5") is large
+    assert loaded == ["sentence-transformers/all-MiniLM-L6-v2", "BAAI/bge-large-en-v1.5"]
+
+
+def test_two_threads_load_the_model_once(monkeypatch):
+    """The RAG, memory and tool-index lanes are built seconds apart at boot and can
+    race the very first load; the lock must yield one weight copy, not two."""
+    import threading
+    import time
+
+    import src.embeddings as embeddings
+
+    start = threading.Barrier(2)
+    loaded = []
+
+    class SlowFastEmbed:
+        def __init__(self, model=None):
+            time.sleep(0.05)  # widen the window the two threads can race through
+            self.model = model or embeddings._DEFAULT_FASTEMBED_MODEL
+            self.url = "local://fastembed"
+            loaded.append(self.model)
+
+        def get_sentence_embedding_dimension(self):
+            return 384
+
+    monkeypatch.setattr(embeddings, "FastEmbedClient", SlowFastEmbed)
+    clients = []
+
+    def worker():
+        start.wait()
+        clients.append(embeddings.get_fastembed_client())
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(loaded) == 1, f"the model was loaded {len(loaded)} times"
+    assert clients[0] is clients[1]
