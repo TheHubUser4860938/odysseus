@@ -319,7 +319,7 @@ def test_fastembed_clients_are_shared_across_lanes(monkeypatch):
         def get_sentence_embedding_dimension(self):
             return 384
 
-        def encode(self, texts, normalize_embeddings=True):
+        def encode(self, texts, normalize_embeddings=True, query=False):
             return [[float(i + 1)] * 384 for i, _ in enumerate(texts)]
 
     monkeypatch.setattr(embeddings, "FastEmbedClient", OneModelFastEmbed)

@@ -10,12 +10,12 @@ class FakeEmbedder:
     def get_sentence_embedding_dimension(self):
         return self.dim
 
-    def encode(self, texts, normalize_embeddings=True):
+    def encode(self, texts, normalize_embeddings=True, query=False):
         return [[float(i + 1)] * self.dim for i, _ in enumerate(texts)]
 
 
 class FailingEmbedder(FakeEmbedder):
-    def encode(self, texts, normalize_embeddings=True):
+    def encode(self, texts, normalize_embeddings=True, query=False):
         raise RuntimeError("embedding endpoint rate limited")
 
 

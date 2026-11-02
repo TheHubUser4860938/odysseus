@@ -34,6 +34,7 @@ import numpy as np
 import httpx
 from typing import List, Optional, Tuple
 
+from src.eg2_embedder import Eg2Embedder
 from src.runtime_paths import get_app_root
 
 logger = logging.getLogger(__name__)
@@ -72,9 +73,12 @@ class EmbeddingClient:
         return self._dim
 
     def encode(
-        self, texts: List[str], normalize_embeddings: bool = True
+        self, texts: List[str], normalize_embeddings: bool = True, query: bool = False
     ) -> np.ndarray:
-        """Encode texts via the API. Returns (N, dim) float32 array."""
+        """Encode texts via the API. Returns (N, dim) float32 array.
+
+        The OpenAI embeddings contract has a single recipe, so `query` is accepted
+        for symmetry with the local clients and ignored."""
         if not texts:
             return np.array([], dtype="float32")
 
@@ -180,20 +184,29 @@ class FastEmbedClient:
                             shutil.rmtree(_root, ignore_errors=True)
             except Exception as _e:
                 logger.debug("embedding cache symlink-heal skipped: %s", _e)
-        kwargs = {"model_name": self.model, "cache_dir": cache_dir}
-        # Isolated evaluation and worker fleets can run many Odysseus
-        # processes on one host.  FastEmbed otherwise lets ONNX Runtime size
-        # a thread pool from the whole machine for every process, which can
-        # create hundreds of threads per worker and starve inference.  Keep
-        # the existing default for normal installs, but allow operators to
-        # bound that pool explicitly.  The pool is fixed when the session is
-        # built, so get_fastembed_client() keys its cache on it.
         self.threads = _fastembed_threads()
-        if self.threads is not None:
-            kwargs["threads"] = self.threads
-        self._embedding = TextEmbedding(**kwargs)
+        if "embeddinggemma" in self.model.lower():
+            # fastembed's catalog carries no embeddinggemma-2, so drive its ONNX
+            # graph with the recipe the Strata store runs - same prefixes, same
+            # output tensor, same L2 norm. EMBEDDINGGEMMA_MODEL_DIR names the
+            # weights; a SHA256SUMS mismatch raises rather than ranking silently
+            # against a different model.
+            self._embedding = Eg2Embedder(threads=self.threads)
+            self.url = f"local://{self._embedding.model}"
+        else:
+            kwargs = {"model_name": self.model, "cache_dir": cache_dir}
+            # Isolated evaluation and worker fleets can run many Odysseus
+            # processes on one host.  FastEmbed otherwise lets ONNX Runtime size
+            # a thread pool from the whole machine for every process, which can
+            # create hundreds of threads per worker and starve inference.  Keep
+            # the existing default for normal installs, but allow operators to
+            # bound that pool explicitly.  The pool is fixed when the session is
+            # built, so get_fastembed_client() keys its cache on it.
+            if self.threads is not None:
+                kwargs["threads"] = self.threads
+            self._embedding = TextEmbedding(**kwargs)
+            self.url = "local://fastembed"
         self._dim: Optional[int] = None
-        self.url = "local://fastembed"
         logger.info(f"FastEmbed loaded model={self.model}")
 
     def get_sentence_embedding_dimension(self) -> int:
@@ -205,13 +218,25 @@ class FastEmbedClient:
         return self._dim
 
     def encode(
-        self, texts: List[str], normalize_embeddings: bool = True
+        self,
+        texts: List[str],
+        normalize_embeddings: bool = True,
+        query: bool = False,
     ) -> np.ndarray:
-        """Encode texts locally. Returns (N, dim) float32 array."""
+        """Encode texts locally. Returns (N, dim) float32 array.
+
+        query=True embeds under the model's retrieval recipe (embeddinggemma-2's
+        "task: search result | query: " prefix, a bge query instruction); documents
+        keep the plain recipe the stored vectors were written with. Mixing the two
+        costs recall, and before this parameter the app embedded queries with the
+        document recipe."""
         if not texts:
             return np.array([], dtype="float32")
 
-        vecs = np.array(list(self._embedding.embed(texts)), dtype="float32")
+        if query and hasattr(self._embedding, "query_embed"):
+            vecs = np.array(list(self._embedding.query_embed(texts)), dtype="float32")
+        else:
+            vecs = np.array(list(self._embedding.embed(texts)), dtype="float32")
 
         if normalize_embeddings and vecs.size > 0:
             norms = np.linalg.norm(vecs, axis=1, keepdims=True)
